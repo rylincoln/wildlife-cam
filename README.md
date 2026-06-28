@@ -23,6 +23,19 @@ order, operational notes).
 
 ## Quickstart
 
+### Automated setup (recommended)
+
+One script installs everything — Homebrew ffmpeg, the Python 3.12 venv + project,
+and the optional [go2rtc](#live-view-optional) binary — then creates
+`~/wildlife/logs`, copies `config.yaml` from the example, and runs the unit tests:
+
+```bash
+./scripts/setup_macos.sh
+```
+
+Afterward, edit `config.yaml` with your camera IPs/credentials. To do it by hand
+instead — or to understand each step — follow the manual steps below.
+
 ### 1. System dependencies
 
 ```bash
@@ -132,17 +145,22 @@ between **Sub** and **Main** per camera.
 ### 1. Install go2rtc
 
 go2rtc is a single static binary — no dependencies. Download the **arm64**
-(Apple Silicon) build and make it executable:
+(Apple Silicon) build; on macOS the release ships as a **`.zip`** (unzip it to
+get the `go2rtc` binary):
 
 - from [`AlexxIT/go2rtc` releases](https://github.com/AlexxIT/go2rtc/releases)
-  (`go2rtc_mac_arm64`), or
+  (`go2rtc_mac_arm64.zip`), or
 - from [`bropat/go2rtc-static`](https://github.com/bropat/go2rtc-static).
 
 ```bash
-# example: install to a Homebrew bin dir already on PATH
-curl -L -o /opt/homebrew/bin/go2rtc \
-  https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_arm64
+# example: download + unzip, then install to a Homebrew bin dir already on PATH
+cd /tmp
+curl -L -o go2rtc_mac_arm64.zip \
+  https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_arm64.zip
+unzip -o go2rtc_mac_arm64.zip                  # -> ./go2rtc
+mv go2rtc /opt/homebrew/bin/go2rtc
 chmod +x /opt/homebrew/bin/go2rtc
+# if macOS Gatekeeper blocks it: xattr -d com.apple.quarantine /opt/homebrew/bin/go2rtc
 ```
 
 (Install it wherever you like — just note the path; the LaunchDaemon below

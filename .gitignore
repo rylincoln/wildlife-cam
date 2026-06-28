@@ -29,3 +29,6 @@ logs/
 .DS_Store
 .vscode/
 .idea/
+
+# go2rtc binary if installed repo-locally by scripts/setup_macos.sh
+/bin/
