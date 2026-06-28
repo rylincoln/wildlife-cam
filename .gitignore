@@ -1,0 +1,30 @@
+# Wildlife Detection — local artifacts, never commit
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+captures/
+.venv/
+venv/
+models/*.pt
+models/*.mlpackage
+models/*.onnx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Logs / runtime
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

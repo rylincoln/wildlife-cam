@@ -1,0 +1,64 @@
+cameras:
+  - id: north_field
+    host: 192.168.1.101
+    username: admin
+    password: "CHANGE_ME"
+    rtsp_main: "rtsp://{username}:{password}@{host}:554/Preview_01_main"
+    rtsp_sub: "rtsp://{username}:{password}@{host}:554/Preview_01_sub"
+    onvif_port: 8000
+  - id: south_trail
+    host: 192.168.1.102
+    username: admin
+    password: "CHANGE_ME"
+    rtsp_main: "rtsp://{username}:{password}@{host}:554/Preview_01_main"
+    rtsp_sub: "rtsp://{username}:{password}@{host}:554/Preview_01_sub"
+    onvif_port: 8000
+
+event_source: reolink_native # reolink_native | onvif_bridge
+
+capture:
+  burst_frames: 5 # grab this many frames per event
+  burst_interval_ms: 200 # spacing between grabs
+  stream: main # main | sub  (8GB is fine with main; sub is lighter)
+  rtsp_timeout_s: 10
+  max_concurrent: 1 # serialize capture+infer; one camera at a time
+
+detection:
+  model_path: "models/yolov8s.pt" # Ultralytics weights; or a .mlpackage for Core ML
+  device: "mps" # mps | cpu  (mps = M1 GPU)
+  animal_classes: # COCO subset treated as "wildlife"
+    - bird
+    - cat
+    - dog
+    - horse
+    - sheep
+    - cow
+    - bear
+    - elephant
+    - zebra
+    - giraffe
+  confidence_threshold: 0.55 # tune: raise for fewer false positives
+  min_box_area_frac: 0.01 # ignore specks < 1% of frame area
+  save_best_only: true # one best frame per event (vs all positives)
+
+dedupe:
+  cooldown_s: 30 # suppress re-triggers from same camera within window
+
+storage:
+  captures_dir: "~/wildlife/captures"
+  db_path: "~/wildlife/captures.db"
+  jpeg_quality: 85
+  thumbnail_px: 320
+
+retention:
+  max_age_days: 30 # prune.py deletes captures older than this
+  min_confidence_keep: 0.0 # optionally also prune low-confidence captures
+
+gallery:
+  host: "0.0.0.0" # bind to LAN
+  port: 8080
+  page_size: 60
+
+resource_guard: # be a good co-tenant with the media server
+  detect_every_nth_event: 1 # raise to skip events if GPU contention ever appears
+  max_burst_per_minute: 20 # hard cap on how often we'll fire inference

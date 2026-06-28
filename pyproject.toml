@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wildlife-detect"
+version = "0.1.0"
+description = "Fully-local, motion-triggered wildlife detection for PoE cameras on Apple Silicon (YOLO on MPS) with a small LAN gallery."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Wildlife Detection" }]
+keywords = ["wildlife", "yolo", "object-detection", "reolink", "onvif", "rtsp", "apple-silicon", "mps"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "pydantic>=2",
+    "pyyaml>=6",
+    "pillow>=10",
+    "numpy>=1.26",
+    "flask>=3",
+]
+
+[project.optional-dependencies]
+detect = [
+    "ultralytics>=8.2",
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "opencv-python>=4.9",
+]
+cameras = [
+    "reolink-aio>=0.9",
+    "onvif-zeep>=0.2.12",
+]
+coreml = [
+    "coremltools>=7",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+wildlife-worker = "wildlife.worker:main"
+wildlife-gallery = "wildlife.gallery.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wildlife"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

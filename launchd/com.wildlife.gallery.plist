@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Wildlife Detection - Flask gallery LaunchDaemon
+  ===========================================================================
+
+  This LaunchDaemon runs the read-only Flask gallery (browse captures by
+  camera/date/class/confidence), bound to the LAN per config.gallery. It is a
+  LaunchDaemon (not a LaunchAgent) so it starts at BOOT without any interactive
+  login session and stays up headless on the always-on Mac mini.
+
+  -------------------------------------------------------------------------
+  EDIT BEFORE INSTALLING
+  -------------------------------------------------------------------------
+  The absolute paths below assume the deploy user is "ry" and the repo lives
+  at /Users/ry/repos/wildlifedetection. If your username or repo location
+  differs, update EVERY path below (ProgramArguments, WorkingDirectory,
+  StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
+  EnvironmentVariables) to match your machine.
+
+  This plist expects a virtualenv at <repo>/.venv with the package installed
+  (e.g. `python3 -m venv .venv && .venv/bin/pip install -e .`), which provides
+  the `wildlife-gallery` console-script entry point.
+
+  -------------------------------------------------------------------------
+  INSTALL
+  -------------------------------------------------------------------------
+    # 1. Copy into the system-wide LaunchDaemons directory:
+    sudo cp launchd/com.wildlife.gallery.plist /Library/LaunchDaemons/
+
+    # 2. LaunchDaemons must be owned by root:wheel and not group/world writable:
+    sudo chown root:wheel /Library/LaunchDaemons/com.wildlife.gallery.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.wildlife.gallery.plist
+
+    # 3. Make sure the log directory exists and is writable by the run user:
+    mkdir -p /Users/ry/wildlife/logs
+
+    # 4. Load (and start, because RunAtLoad=true) the daemon:
+    sudo launchctl load /Library/LaunchDaemons/com.wildlife.gallery.plist
+
+  -------------------------------------------------------------------------
+  MANAGE
+  -------------------------------------------------------------------------
+    # Stop + unload:
+    sudo launchctl unload /Library/LaunchDaemons/com.wildlife.gallery.plist
+
+    # Check status (look for the label):
+    sudo launchctl list | grep com.wildlife
+
+    # Tail the logs:
+    tail -f /Users/ry/wildlife/logs/gallery.out.log \
+            /Users/ry/wildlife/logs/gallery.err.log
+
+    # Then browse from any LAN device to http://<mac-mini-ip>:8080
+    # (host/port come from config.gallery).
+
+  Notes:
+    * LaunchDaemons run as root by default; UserName below makes the process
+      run as "ry" so the captures dir and SQLite DB resolve to that account.
+    * KeepAlive=true relaunches the gallery if it crashes; RunAtLoad=true starts
+      it immediately on load and at every boot.
+  ===========================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wildlife.gallery</string>
+
+    <!-- Run as the deploy user (EDIT to your username) so ~ resolves correctly. -->
+    <key>UserName</key>
+    <string>ry</string>
+
+    <!-- The gallery entry point installed into the venv. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ry/repos/wildlifedetection/.venv/bin/wildlife-gallery</string>
+    </array>
+
+    <!-- cwd so relative paths (config.yaml) resolve against the repo. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/ry/repos/wildlifedetection</string>
+
+    <!-- Start at boot / on load. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch automatically if the gallery exits or crashes. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Lightweight web server; keep it out of the media server's way. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
+    <key>StandardOutPath</key>
+    <string>/Users/ry/wildlife/logs/gallery.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ry/wildlife/logs/gallery.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- venv + Homebrew (Apple Silicon) on PATH. -->
+        <key>PATH</key>
+        <string>/Users/ry/repos/wildlifedetection/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- HOME so "~" in config (captures_dir, db_path) expands to the deploy user. -->
+        <key>HOME</key>
+        <string>/Users/ry</string>
+        <!-- Unbuffered Python so log lines flush promptly. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <!-- Optional: point at an explicit config file if not using ./config.yaml. -->
+        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/ry/repos/wildlifedetection/config.yaml</string> -->
+    </dict>
+</dict>
+</plist>

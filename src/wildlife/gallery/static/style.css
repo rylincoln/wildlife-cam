@@ -1,0 +1,449 @@
+/* Wildlife Gallery — clean, modern, dark-friendly styling.
+   Server-rendered thumbnail grid + filter bar + vanilla-JS lightbox. */
+
+:root {
+  color-scheme: dark light;
+  --bg: #0e1116;
+  --bg-elev: #161b22;
+  --bg-elev-2: #1c232c;
+  --border: #2a323d;
+  --text: #e6edf3;
+  --text-dim: #9aa7b4;
+  --accent: #4ea1ff;
+  --accent-strong: #2b7fff;
+  --good: #3fb950;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.noscroll {
+  overflow: hidden;
+}
+
+/* ----------------------------- Top bar ----------------------------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(14, 17, 22, 0.85);
+  backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.brand-mark {
+  font-size: 22px;
+}
+
+.brand h1 {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  margin: 0;
+}
+
+/* ----------------------------- Filters ----------------------------- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field > span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+.field select,
+.field input[type="date"],
+.field input[type="range"] {
+  appearance: none;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font: inherit;
+  min-height: 38px;
+}
+
+.field input[type="range"] {
+  padding: 0;
+  height: 38px;
+  width: 150px;
+  accent-color: var(--accent);
+}
+
+.field select:focus,
+.field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(78, 161, 255, 0.18);
+}
+
+.field.actions {
+  flex-direction: row;
+  gap: 8px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  text-decoration: none;
+  min-height: 38px;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn.primary {
+  background: var(--accent-strong);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: var(--accent);
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.btn.ghost:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.btn[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ----------------------------- Grid ----------------------------- */
+main {
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  position: relative;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: zoom-in;
+  aspect-ratio: 4 / 3;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.card .thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--bg-elev-2);
+}
+
+.card .meta {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 22px 10px 9px;
+  font-size: 12px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
+  pointer-events: none;
+}
+
+.card .meta .label {
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.card .meta .conf {
+  background: var(--good);
+  color: #07210d;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.card .meta .cam {
+  color: var(--text-dim);
+}
+
+.card .meta .ts {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+/* ----------------------------- Empty / load more ----------------------------- */
+.empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 80px 20px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.loadmore-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 0 8px;
+}
+
+.end-note {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ----------------------------- Lightbox ----------------------------- */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 11, 0.92);
+  backdrop-filter: blur(6px);
+  padding: 24px;
+}
+
+.lightbox[hidden] {
+  display: none;
+}
+
+.lb-figure {
+  position: relative;
+  margin: 0;
+  max-width: min(94vw, 1400px);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#lbImg {
+  max-width: 100%;
+  max-height: 84vh;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: var(--bg-elev);
+}
+
+#lbImg.ready {
+  opacity: 1;
+}
+
+.lb-cap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  margin-top: 14px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.lb-cap strong {
+  text-transform: capitalize;
+  font-weight: 650;
+}
+
+.lb-cap .lb-conf {
+  background: var(--good);
+  color: #07210d;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.lb-cap .lb-cam,
+.lb-cap .lb-ts {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.lb-btn {
+  position: absolute;
+  z-index: 2;
+  background: rgba(22, 27, 34, 0.7);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: 46px;
+  height: 46px;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+
+.lb-btn:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #fff;
+}
+
+.lb-btn:active {
+  transform: scale(0.94);
+}
+
+.lb-close {
+  top: 18px;
+  right: 18px;
+}
+
+.lb-prev {
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.lb-next {
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.lb-prev:active,
+.lb-next:active {
+  transform: translateY(-50%) scale(0.94);
+}
+
+.lb-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 38px;
+  height: 38px;
+  margin: -19px 0 0 -19px;
+  border: 3px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.lb-spinner[hidden] {
+  display: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ----------------------------- Responsive ----------------------------- */
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+
+  .field input[type="range"] {
+    width: 120px;
+  }
+
+  .lb-prev {
+    left: 8px;
+  }
+
+  .lb-next {
+    right: 8px;
+  }
+}
+
+/* Light mode courtesy support. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6f9;
+    --bg-elev: #ffffff;
+    --bg-elev-2: #e9edf2;
+    --border: #d6dde5;
+    --text: #1a2029;
+    --text-dim: #5c6773;
+    --shadow: 0 6px 22px rgba(20, 30, 45, 0.16);
+  }
+
+  .topbar {
+    background: rgba(244, 246, 249, 0.88);
+  }
+}

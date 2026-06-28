@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wildlife Gallery</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#128062;</span>
+      <h1>Wildlife Gallery</h1>
+    </div>
+
+    <form id="filters" class="filters" method="get" action="{{ url_for('index') }}">
+      <label class="field">
+        <span>Camera</span>
+        <select name="camera">
+          <option value="">All cameras</option>
+          {% for cam in cameras %}
+          <option value="{{ cam }}" {% if filters.camera == cam %}selected{% endif %}>{{ cam }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Class</span>
+        <select name="label">
+          <option value="">All classes</option>
+          {% for lbl in labels %}
+          <option value="{{ lbl }}" {% if filters.label == lbl %}selected{% endif %}>{{ lbl }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="field">
+        <span>From</span>
+        <input type="date" name="start" value="{{ filters.start_raw }}">
+      </label>
+
+      <label class="field">
+        <span>To</span>
+        <input type="date" name="end" value="{{ filters.end_raw }}">
+      </label>
+
+      <label class="field">
+        <span>Min conf <output id="confOut">{{ filters.min_confidence_raw or '0.00' }}</output></span>
+        <input type="range" name="min_confidence" min="0" max="1" step="0.05"
+               value="{{ filters.min_confidence_raw or '0' }}"
+               oninput="document.getElementById('confOut').textContent = parseFloat(this.value).toFixed(2)">
+      </label>
+
+      <div class="field actions">
+        <button type="submit" class="btn primary">Apply</button>
+        <a class="btn ghost" href="{{ url_for('index') }}">Reset</a>
+      </div>
+    </form>
+  </header>
+
+  <main>
+    <div id="empty" class="empty" {% if captures %}hidden{% endif %}>
+      <p>No captures match these filters yet.</p>
+    </div>
+
+    <section id="grid" class="grid" aria-live="polite">
+      {% for c in captures %}
+      <article class="card"
+               data-id="{{ c.id }}"
+               data-full="{{ c.image_url }}"
+               data-label="{{ c.label }}"
+               data-confidence="{{ c.confidence }}"
+               data-camera="{{ c.camera_id }}"
+               data-ts="{{ c.capture_ts }}">
+        <img class="thumb" loading="lazy" src="{{ c.thumb_url }}"
+             alt="{{ c.label }} detected on {{ c.camera_id }}">
+        <div class="meta">
+          <span class="label">{{ c.label }}</span>
+          <span class="conf">{{ (c.confidence * 100) | round(0) | int }}%</span>
+          <span class="cam">{{ c.camera_id }}</span>
+          <span class="ts">{{ (c.capture_ts or '')[:19] | replace('T', ' ') }}</span>
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+
+    <div class="loadmore-wrap">
+      <button id="loadMore" class="btn primary" {% if not has_more %}hidden{% endif %}>Load more</button>
+      <p id="endNote" class="end-note" {% if has_more or not captures %}hidden{% endif %}>End of results.</p>
+    </div>
+  </main>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Capture viewer">
+    <button class="lb-btn lb-close" aria-label="Close">&times;</button>
+    <button class="lb-btn lb-prev" aria-label="Previous">&#8249;</button>
+    <button class="lb-btn lb-next" aria-label="Next">&#8250;</button>
+    <figure class="lb-figure">
+      <div class="lb-spinner" id="lbSpinner"></div>
+      <img id="lbImg" alt="">
+      <figcaption id="lbCap" class="lb-cap"></figcaption>
+    </figure>
+  </div>
+
+  <script id="gallery-state" type="application/json">
+    {{ {"page": page, "hasMore": has_more, "pageSize": page_size} | tojson }}
+  </script>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const state = JSON.parse(document.getElementById("gallery-state").textContent);
+      let page = state.page;
+      let hasMore = state.hasMore;
+      let loading = false;
+
+      const grid = document.getElementById("grid");
+      const loadMoreBtn = document.getElementById("loadMore");
+      const endNote = document.getElementById("endNote");
+      const emptyBox = document.getElementById("empty");
+
+      function fmtTs(ts) {
+        if (!ts) return "";
+        return String(ts).slice(0, 19).replace("T", " ");
+      }
+
+      function fmtConf(c) {
+        const v = parseFloat(c);
+        return Number.isFinite(v) ? Math.round(v * 100) + "%" : "--";
+      }
+
+      // Build a card element identical to the server-rendered markup.
+      function renderCard(c) {
+        const card = document.createElement("article");
+        card.className = "card";
+        card.dataset.id = c.id;
+        card.dataset.full = c.image_url;
+        card.dataset.label = c.label != null ? c.label : "";
+        card.dataset.confidence = c.confidence != null ? c.confidence : "";
+        card.dataset.camera = c.camera_id != null ? c.camera_id : "";
+        card.dataset.ts = c.capture_ts != null ? c.capture_ts : "";
+
+        const img = document.createElement("img");
+        img.className = "thumb";
+        img.loading = "lazy";
+        img.src = c.thumb_url;
+        img.alt = (c.label || "capture") + " detected on " + (c.camera_id || "camera");
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.innerHTML =
+          '<span class="label"></span>' +
+          '<span class="conf"></span>' +
+          '<span class="cam"></span>' +
+          '<span class="ts"></span>';
+        meta.querySelector(".label").textContent = c.label || "";
+        meta.querySelector(".conf").textContent = fmtConf(c.confidence);
+        meta.querySelector(".cam").textContent = c.camera_id || "";
+        meta.querySelector(".ts").textContent = fmtTs(c.capture_ts);
+
+        card.appendChild(img);
+        card.appendChild(meta);
+        return card;
+      }
+
+      function apiUrl(p) {
+        const params = new URLSearchParams(window.location.search);
+        params.set("page", p);
+        return "/api/captures?" + params.toString();
+      }
+
+      async function loadMore() {
+        if (loading || !hasMore) return;
+        loading = true;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.textContent = "Loading…";
+        try {
+          const res = await fetch(apiUrl(page + 1), { headers: { "Accept": "application/json" } });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          page = data.page;
+          hasMore = data.has_more;
+          const frag = document.createDocumentFragment();
+          (data.captures || []).forEach((c) => frag.appendChild(renderCard(c)));
+          grid.appendChild(frag);
+        } catch (err) {
+          console.error("Failed to load more captures:", err);
+        } finally {
+          loading = false;
+          loadMoreBtn.disabled = false;
+          loadMoreBtn.textContent = "Load more";
+          if (!hasMore) {
+            loadMoreBtn.hidden = true;
+            if (grid.children.length > 0) endNote.hidden = false;
+          }
+        }
+      }
+
+      if (loadMoreBtn) loadMoreBtn.addEventListener("click", loadMore);
+
+      // Infinite scroll: load the next page as the sentinel nears the viewport.
+      const sentinel = document.createElement("div");
+      sentinel.style.height = "1px";
+      document.querySelector(".loadmore-wrap").before(sentinel);
+      if ("IntersectionObserver" in window) {
+        const io = new IntersectionObserver((entries) => {
+          if (entries.some((e) => e.isIntersecting)) loadMore();
+        }, { rootMargin: "600px 0px" });
+        io.observe(sentinel);
+      }
+
+      // ----- Lightbox ----- //
+      const lb = document.getElementById("lightbox");
+      const lbImg = document.getElementById("lbImg");
+      const lbCap = document.getElementById("lbCap");
+      const lbSpinner = document.getElementById("lbSpinner");
+      let currentCard = null;
+
+      function cards() {
+        return Array.from(grid.querySelectorAll(".card"));
+      }
+
+      function openLightbox(card) {
+        currentCard = card;
+        const full = card.dataset.full;
+        const label = card.dataset.label || "";
+        const conf = fmtConf(card.dataset.confidence);
+        const cam = card.dataset.camera || "";
+        const ts = fmtTs(card.dataset.ts);
+
+        lbSpinner.hidden = false;
+        lbImg.classList.remove("ready");
+        lbImg.alt = label + " on " + cam;
+        // Lazy-load the full-resolution image only when opened.
+        lbImg.onload = () => { lbSpinner.hidden = true; lbImg.classList.add("ready"); };
+        lbImg.onerror = () => { lbSpinner.hidden = true; };
+        lbImg.src = full;
+
+        lbCap.innerHTML =
+          '<strong></strong><span class="lb-conf"></span>' +
+          '<span class="lb-cam"></span><span class="lb-ts"></span>';
+        lbCap.querySelector("strong").textContent = label;
+        lbCap.querySelector(".lb-conf").textContent = conf;
+        lbCap.querySelector(".lb-cam").textContent = cam;
+        lbCap.querySelector(".lb-ts").textContent = ts;
+
+        lb.hidden = false;
+        document.body.classList.add("noscroll");
+      }
+
+      function closeLightbox() {
+        lb.hidden = true;
+        lbImg.removeAttribute("src");
+        currentCard = null;
+        document.body.classList.remove("noscroll");
+      }
+
+      function step(delta) {
+        if (!currentCard) return;
+        const all = cards();
+        const idx = all.indexOf(currentCard);
+        if (idx === -1) return;
+        let next = idx + delta;
+        // At the end, try to pull in more before giving up.
+        if (next >= all.length && hasMore) { loadMore(); return; }
+        if (next < 0) next = 0;
+        if (next >= all.length) next = all.length - 1;
+        openLightbox(all[next]);
+      }
+
+      grid.addEventListener("click", (e) => {
+        const card = e.target.closest(".card");
+        if (card) openLightbox(card);
+      });
+
+      lb.addEventListener("click", (e) => {
+        if (e.target === lb) closeLightbox();
+        else if (e.target.closest(".lb-close")) closeLightbox();
+        else if (e.target.closest(".lb-prev")) step(-1);
+        else if (e.target.closest(".lb-next")) step(1);
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (lb.hidden) return;
+        if (e.key === "Escape") closeLightbox();
+        else if (e.key === "ArrowLeft") step(-1);
+        else if (e.key === "ArrowRight") step(1);
+      });
+    })();
+  </script>
+</body>
+</html>
