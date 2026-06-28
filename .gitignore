@@ -32,3 +32,6 @@ logs/
 
 # go2rtc binary if installed repo-locally by scripts/setup_macos.sh
 /bin/
+
+# test-mode workspace (scripts/run_demo.sh)
+/.demo/
