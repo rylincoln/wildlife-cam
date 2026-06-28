@@ -1,5 +1,6 @@
 # Wildlife Detection — local artifacts, never commit
 config.yaml
+go2rtc.yaml
 *.db
 *.db-wal
 *.db-shm

@@ -68,6 +68,31 @@ body.noscroll {
   margin: 0;
 }
 
+/* ----------------------------- Nav links ----------------------------- */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.nav-link {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+  background: var(--bg-elev);
+}
+
 /* ----------------------------- Filters ----------------------------- */
 .filters {
   display: flex;
@@ -411,11 +436,99 @@ main {
   }
 }
 
+/* ----------------------------- Live view ----------------------------- */
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px;
+}
+
+.live-grid.single {
+  grid-template-columns: 1fr;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.live-tile {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.live-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.live-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.live-title-link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.live-title-link:hover {
+  color: var(--accent);
+}
+
+.player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  display: block;
+  background: #000;
+}
+
+/* Segmented Sub | Main toggle. */
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+}
+
+.seg-btn {
+  appearance: none;
+  background: transparent;
+  color: var(--text-dim);
+  border: 0;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.seg-btn:hover {
+  color: var(--text);
+}
+
+.seg-btn.active {
+  background: var(--accent-strong);
+  color: #fff;
+}
+
 /* ----------------------------- Responsive ----------------------------- */
 @media (max-width: 640px) {
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 10px;
+  }
+
+  .live-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .field input[type="range"] {

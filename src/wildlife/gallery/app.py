@@ -167,6 +167,73 @@ def create_app(config: Config) -> Flask:
             g._store = None
 
     # ----------------------------------------------------------------------- #
+    # Livestream (go2rtc) helpers + routes
+    # ----------------------------------------------------------------------- #
+    def _live_base() -> str:
+        """Resolve the browser-reachable go2rtc base URL for iframe embeds.
+
+        Prefers an explicit ``livestream.go2rtc_url`` override; otherwise derives
+        it from the request's host (port stripped) plus the configured
+        ``go2rtc_port`` so the same gallery works from any LAN client.
+        """
+        ls = config.livestream
+        if ls.go2rtc_url:
+            return ls.go2rtc_url.rstrip("/")
+        host = request.host.split(":")[0]
+        return f"http://{host}:{ls.go2rtc_port}"
+
+    def _stream_iframe_src(base: str, stream_name: str) -> str:
+        """Build the go2rtc ``stream.html`` embed URL for a single stream name."""
+        return f"{base}/stream.html?src={stream_name}&mode={config.livestream.mode}"
+
+    def _camera_live(base: str, camera) -> dict:
+        """Shape a camera into its ``sub``/``main`` absolute iframe URLs.
+
+        Stream names follow the frozen go2rtc convention ``<id>_sub`` /
+        ``<id>_main`` so they line up with the generated ``go2rtc.yaml``.
+        """
+        return {
+            "id": camera.id,
+            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub"),
+            "main_src": _stream_iframe_src(base, f"{camera.id}_main"),
+        }
+
+    @app.route("/live")
+    def live():
+        """Render the live grid of every camera's go2rtc player embed."""
+        ls = config.livestream
+        if not ls.enabled:
+            abort(404)
+        base = _live_base()
+        cameras = [_camera_live(base, cam) for cam in config.cameras]
+        return render_template(
+            "live.html",
+            cameras=cameras,
+            default_stream=ls.default_stream,
+            allow_main=ls.allow_main,
+            single=False,
+        )
+
+    @app.route("/live/<camera_id>")
+    def live_camera(camera_id: str):
+        """Render a single enlarged live player for one camera id."""
+        ls = config.livestream
+        if not ls.enabled:
+            abort(404)
+        camera = next((c for c in config.cameras if c.id == camera_id), None)
+        if camera is None:
+            abort(404)
+        base = _live_base()
+        cameras = [_camera_live(base, camera)]
+        return render_template(
+            "live.html",
+            cameras=cameras,
+            default_stream=ls.default_stream,
+            allow_main=ls.allow_main,
+            single=True,
+        )
+
+    # ----------------------------------------------------------------------- #
     # Serialization + query helpers
     # ----------------------------------------------------------------------- #
     def _serialize(row: dict) -> dict:
@@ -229,6 +296,7 @@ def create_app(config: Config) -> Flask:
             page=page,
             page_size=page_size,
             has_more=has_more,
+            livestream_enabled=config.livestream.enabled,
         )
 
     @app.route("/api/captures")
