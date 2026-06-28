@@ -35,7 +35,7 @@ detect = [
     "opencv-python>=4.9",
 ]
 cameras = [
-    "reolink-aio>=0.9",
+    "reolink-aio>=0.21",
     "onvif-zeep>=0.2.12",
 ]
 coreml = [
@@ -49,6 +49,7 @@ dev = [
 [project.scripts]
 wildlife-worker = "wildlife.worker:main"
 wildlife-gallery = "wildlife.gallery.app:main"
+wildlife-stream-config = "wildlife.stream.config_gen:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wildlife"]

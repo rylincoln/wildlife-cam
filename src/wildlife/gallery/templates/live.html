@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wildlife Live{% if single and cameras %} &middot; {{ cameras[0].id }}{% endif %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#128062;</span>
+      <h1>Wildlife Live{% if single and cameras %} &middot; {{ cameras[0].id }}{% endif %}</h1>
+      <nav class="nav">
+        <a class="nav-link" href="{{ url_for('index') }}">&#8592; Gallery</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div id="empty" class="empty" {% if cameras %}hidden{% endif %}>
+      <p>No cameras configured for live view.</p>
+    </div>
+
+    <section class="live-grid{% if single %} single{% endif %}" aria-live="polite">
+      {% for cam in cameras %}
+      <article class="live-tile"
+               data-sub="{{ cam.sub_src }}"
+               data-main="{{ cam.main_src }}">
+        <div class="live-head">
+          <h2 class="live-title">
+            {% if not single %}
+            <a class="live-title-link" href="{{ url_for('live_camera', camera_id=cam.id) }}">{{ cam.id }}</a>
+            {% else %}
+            {{ cam.id }}
+            {% endif %}
+          </h2>
+          {% if allow_main %}
+          <div class="seg-toggle" role="group" aria-label="Stream quality for {{ cam.id }}">
+            <button type="button" class="seg-btn{% if default_stream == 'sub' %} active{% endif %}"
+                    data-stream="sub"
+                    aria-pressed="{{ 'true' if default_stream == 'sub' else 'false' }}">Sub</button>
+            <button type="button" class="seg-btn{% if default_stream == 'main' %} active{% endif %}"
+                    data-stream="main"
+                    aria-pressed="{{ 'true' if default_stream == 'main' else 'false' }}">Main 4K</button>
+          </div>
+          {% endif %}
+        </div>
+        <iframe class="player"
+                src="{{ cam.main_src if default_stream == 'main' else cam.sub_src }}"
+                title="Live view of {{ cam.id }}"
+                allow="autoplay; fullscreen; picture-in-picture"
+                allowfullscreen></iframe>
+      </article>
+      {% endfor %}
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      // Each tile carries its sub/main embed URLs as data attributes; the
+      // segmented toggle swaps the iframe src in place (on-demand, no reload of
+      // the page) and tracks the active button.
+      document.querySelectorAll(".live-tile").forEach(function (tile) {
+        var iframe = tile.querySelector(".player");
+        var srcs = { sub: tile.dataset.sub, main: tile.dataset.main };
+        var buttons = tile.querySelectorAll(".seg-btn");
+
+        buttons.forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var next = srcs[btn.dataset.stream];
+            if (next && iframe.getAttribute("src") !== next) {
+              iframe.src = next;
+            }
+            buttons.forEach(function (b) {
+              var on = b === btn;
+              b.classList.toggle("active", on);
+              b.setAttribute("aria-pressed", on ? "true" : "false");
+            });
+          });
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

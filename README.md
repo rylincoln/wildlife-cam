@@ -115,6 +115,98 @@ confidence; click a thumbnail to load the full image.
 
 ---
 
+## Live view (optional)
+
+The detector saves still frames only — it never records video. If you also want
+a **live look** at a camera, the gallery can embed an on-demand low-latency
+player backed by [**go2rtc**](https://github.com/AlexxIT/go2rtc), an external
+binary that runs as a third service. This is fully **additive**: the worker
+(`worker.py` / `capture.py` / `detect.py`) is untouched and keeps doing its own
+short RTSP bursts. go2rtc pulls a camera's RTSP feed **only while someone is
+watching** and re-publishes it as WebRTC/MSE.
+
+For each camera, two streams are exposed: `<camera_id>_sub` (lighter, the
+default) and `<camera_id>_main` (full 4K). The `/live` pages let a viewer toggle
+between **Sub** and **Main** per camera.
+
+### 1. Install go2rtc
+
+go2rtc is a single static binary — no dependencies. Download the **arm64**
+(Apple Silicon) build and make it executable:
+
+- from [`AlexxIT/go2rtc` releases](https://github.com/AlexxIT/go2rtc/releases)
+  (`go2rtc_mac_arm64`), or
+- from [`bropat/go2rtc-static`](https://github.com/bropat/go2rtc-static).
+
+```bash
+# example: install to a Homebrew bin dir already on PATH
+curl -L -o /opt/homebrew/bin/go2rtc \
+  https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_mac_arm64
+chmod +x /opt/homebrew/bin/go2rtc
+```
+
+(Install it wherever you like — just note the path; the LaunchDaemon below
+points at `/opt/homebrew/bin/go2rtc` and has a comment showing where to edit it.)
+
+### 2. Generate `go2rtc.yaml` from your config
+
+```bash
+wildlife-stream-config                 # reads ./config.yaml -> writes ./go2rtc.yaml
+# or: wildlife-stream-config config.yaml go2rtc.yaml
+```
+
+This reads your cameras (reusing the same credential-interpolated RTSP URLs the
+detector uses) and the `livestream:` block in `config.yaml`, then writes
+`go2rtc.yaml` with one `<id>_main` and one `<id>_sub` stream per camera plus the
+api/webrtc/rtsp listen ports. `go2rtc.yaml` is **gitignored** because it embeds
+camera RTSP credentials (just like `config.yaml`). Re-run it whenever you change
+cameras or ports.
+
+### 3. Test-run go2rtc in the foreground
+
+```bash
+go2rtc -config go2rtc.yaml
+```
+
+Open `http://<mac-LAN-ip>:1984/` (go2rtc's own dashboard) and confirm each
+camera's `_sub` / `_main` stream plays. Stop it with `Ctrl-C` once it works.
+
+### 4. Enable it in the gallery
+
+Add a `livestream:` block to `config.yaml` and set `enabled: true`, then restart
+the gallery:
+
+```yaml
+livestream:
+  enabled: true            # off by default; turning this on reveals /live
+  go2rtc_port: 1984        # browser-reachable go2rtc api port
+  # go2rtc_url:            # optional full override, e.g. "http://192.168.1.50:1984";
+                           # if unset, the gallery derives it from the request host
+  default_stream: sub      # sub | main  (sub is lighter; default)
+  allow_main: true         # show the Main (4K) toggle in the UI
+  mode: "webrtc,mse"       # go2rtc player tech preference
+```
+
+Now browse to `http://<mac-LAN-ip>:8080/live` for a grid of all cameras, or
+`http://<mac-LAN-ip>:8080/live/<camera_id>` for a single camera. (When
+`livestream.enabled` is `false`, the `/live` routes return 404 and the gallery
+shows no live link.)
+
+### Networking & security
+
+- **LAN ports to allow** on the Mac mini: **1984** (go2rtc api + player),
+  **8555** (WebRTC), **8554** (RTSP). These are the defaults from the
+  `livestream` block (`go2rtc_port` / `webrtc_listen` / `rtsp_listen`).
+- **On-demand:** go2rtc connects to a camera only while that stream is being
+  watched, so an idle `/live` page costs nothing and respects Reolink's
+  open→watch→close connection discipline.
+- **LAN-only / no auth:** like the gallery, go2rtc has **no authentication** by
+  default and is intended for LAN-only use. Do **not** expose ports 1984/8555/
+  8554 to the internet. go2rtc can add HTTP basic auth via `api.username` /
+  `api.password` in `go2rtc.yaml` if you need a minimal gate.
+
+---
+
 ## Running as a service (launchd)
 
 For 24/7 operation, install the worker and gallery as **LaunchDaemons** (not
@@ -122,7 +214,9 @@ LaunchAgents) so they start at boot without an interactive login and relaunch on
 crash. Example plists live under `launchd/`.
 
 - Use a **LaunchDaemon** (`/Library/LaunchDaemons/com.wildlife.detect.plist` and
-  `com.wildlife.gallery.plist`).
+  `com.wildlife.gallery.plist`). If you enabled live view, there is an optional
+  **third** LaunchDaemon, `com.wildlife.stream.plist`, that runs go2rtc (see
+  [Live view (optional)](#live-view-optional)).
 - Set `<key>UserName</key>` to your account so paths under `~` and the captures
   directory resolve to your user (LaunchDaemons run as root by default), or use
   absolute paths in `config.yaml`.
@@ -137,6 +231,11 @@ sudo cp launchd/com.wildlife.detect.plist   /Library/LaunchDaemons/
 sudo cp launchd/com.wildlife.gallery.plist  /Library/LaunchDaemons/
 sudo launchctl load /Library/LaunchDaemons/com.wildlife.detect.plist
 sudo launchctl load /Library/LaunchDaemons/com.wildlife.gallery.plist
+
+# Optional third daemon: the go2rtc livestream companion (see "Live view").
+# Generate go2rtc.yaml first (wildlife-stream-config), then:
+sudo cp launchd/com.wildlife.stream.plist   /Library/LaunchDaemons/
+sudo launchctl load /Library/LaunchDaemons/com.wildlife.stream.plist
 ```
 
 ### Keep the Mac awake

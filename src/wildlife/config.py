@@ -33,6 +33,7 @@ __all__ = [
     "RetentionConfig",
     "GalleryConfig",
     "ResourceGuardConfig",
+    "LivestreamConfig",
     "Config",
     "load_config",
 ]
@@ -136,6 +137,26 @@ class ResourceGuardConfig(BaseModel):
     max_burst_per_minute: int = Field(default=20, ge=1)
 
 
+class LivestreamConfig(BaseModel):
+    """Optional on-demand live view served by a companion go2rtc binary.
+
+    Additive feature: the detector pipeline is untouched. When ``enabled``, the
+    gallery embeds go2rtc's player (``stream.html``) so viewers can watch a
+    camera live, picking the lighter sub stream or the 4K main stream. The
+    ``*_listen`` fields configure the generated ``go2rtc.yaml`` bind addresses.
+    """
+
+    enabled: bool = False
+    go2rtc_port: int = Field(default=1984, ge=1, le=65535)  # browser-reachable go2rtc api port
+    go2rtc_url: str | None = None  # full base override e.g. "http://192.168.1.50:1984"; if None, gallery derives from request host
+    api_listen: str = ":1984"  # go2rtc api bind (for generated go2rtc.yaml)
+    webrtc_listen: str = ":8555"
+    rtsp_listen: str = ":8554"
+    default_stream: Literal["sub", "main"] = "sub"
+    allow_main: bool = True  # expose the Main toggle in the UI
+    mode: str = "webrtc,mse"  # go2rtc player tech preference
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -148,6 +169,7 @@ class Config(BaseModel):
     retention: RetentionConfig
     gallery: GalleryConfig
     resource_guard: ResourceGuardConfig
+    livestream: LivestreamConfig = Field(default_factory=LivestreamConfig)
 
 
 def load_config(path: str | Path) -> Config:

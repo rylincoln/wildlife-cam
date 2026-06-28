@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Wildlife Detection - go2rtc livestream LaunchDaemon (3rd service, optional)
+  ===========================================================================
+
+  This LaunchDaemon runs the optional go2rtc livestream companion: a small
+  external binary that pulls each camera's RTSP feed ON DEMAND (only while a
+  viewer is watching) and re-publishes it as low-latency WebRTC/MSE for the
+  gallery's /live pages to embed. It is the THIRD service alongside the worker
+  (com.wildlife.detect) and the gallery (com.wildlife.gallery), and it is
+  entirely additive — the detector (worker.py / capture.py / detect.py) is
+  untouched and keeps using its own short RTSP bursts.
+
+  It is a LaunchDaemon (not a LaunchAgent) so it starts at BOOT without any
+  interactive login session and stays up headless on the always-on Mac mini.
+
+  =========================================================================
+  EDIT BEFORE INSTALLING
+  =========================================================================
+  The absolute paths below assume the deploy user is "ry" and the repo lives
+  at /Users/ry/repos/wildlifedetection. If your username or repo location
+  differs, update EVERY path below (ProgramArguments, WorkingDirectory,
+  StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
+  EnvironmentVariables) to match your machine.
+
+  This plist expects:
+    * a go2rtc binary on disk (see the ProgramArguments comment below to edit
+      its path; /opt/homebrew/bin/go2rtc is assumed), and
+    * a generated go2rtc.yaml in the repo root — create it from config.yaml
+      with `wildlife-stream-config` (writes ./go2rtc.yaml; gitignored because
+      it embeds camera RTSP credentials, like config.yaml).
+
+  =========================================================================
+  INSTALL
+  =========================================================================
+    # 0. Generate go2rtc.yaml from your config.yaml first:
+    cd /Users/ry/repos/wildlifedetection && .venv/bin/wildlife-stream-config
+
+    # 1. Copy into the system-wide LaunchDaemons directory:
+    sudo cp launchd/com.wildlife.stream.plist /Library/LaunchDaemons/
+
+    # 2. LaunchDaemons must be owned by root:wheel and not group/world writable:
+    sudo chown root:wheel /Library/LaunchDaemons/com.wildlife.stream.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.wildlife.stream.plist
+
+    # 3. Make sure the log directory exists and is writable by the run user:
+    mkdir -p /Users/ry/wildlife/logs
+
+    # 4. Load (and start, because RunAtLoad=true) the daemon:
+    sudo launchctl load /Library/LaunchDaemons/com.wildlife.stream.plist
+
+  =========================================================================
+  MANAGE
+  =========================================================================
+    # Stop + unload:
+    sudo launchctl unload /Library/LaunchDaemons/com.wildlife.stream.plist
+
+    # Check status (look for the label):
+    sudo launchctl list | grep com.wildlife
+
+    # Tail the logs:
+    tail -f /Users/ry/wildlife/logs/stream.out.log \
+            /Users/ry/wildlife/logs/stream.err.log
+
+    # Then browse from any LAN device to http://<mac-mini-ip>:8080/live
+    # (the gallery embeds go2rtc's player from the api port, default 1984).
+
+  Notes:
+    * LaunchDaemons run as root by default; UserName below makes the process
+      run as "ry" so HOME / relative paths resolve to that account.
+    * KeepAlive=true relaunches go2rtc if it crashes; RunAtLoad=true starts it
+      immediately on load and at every boot.
+    * On-demand: go2rtc opens a camera's RTSP stream only while someone is
+      watching that stream, then drops it — so an idle /live page costs nothing.
+    * LAN ports to allow: 1984 (api/player), 8555 (webrtc), 8554 (rtsp).
+    * LAN-only / no auth by default — see README "Live view (optional)".
+  ===========================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wildlife.stream</string>
+
+    <!-- Run as the deploy user (EDIT to your username) so ~ resolves correctly. -->
+    <key>UserName</key>
+    <string>ry</string>
+
+    <!-- The go2rtc binary + generated config.
+         EDIT the go2rtc binary path below to wherever you installed it
+         (e.g. /opt/homebrew/bin/go2rtc, /usr/local/bin/go2rtc, or a path
+         under this repo). The -config path points at the generated
+         go2rtc.yaml in the repo root. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/go2rtc</string>
+        <string>-config</string>
+        <string>/Users/ry/repos/wildlifedetection/go2rtc.yaml</string>
+    </array>
+
+    <!-- cwd so relative paths resolve against the repo. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/ry/repos/wildlifedetection</string>
+
+    <!-- Start at boot / on load. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch automatically if go2rtc exits or crashes. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- On-demand relay; keep it out of the media server's way. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Nice the process so the media server / detector win GPU+CPU contention. -->
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
+    <key>StandardOutPath</key>
+    <string>/Users/ry/wildlife/logs/stream.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ry/wildlife/logs/stream.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- venv + Homebrew (Apple Silicon) on PATH. -->
+        <key>PATH</key>
+        <string>/Users/ry/repos/wildlifedetection/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- HOME so "~" resolves to the deploy user. -->
+        <key>HOME</key>
+        <string>/Users/ry</string>
+        <!-- Unbuffered Python so log lines flush promptly. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>
