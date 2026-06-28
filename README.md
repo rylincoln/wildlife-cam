@@ -69,6 +69,22 @@ cp config.example.yaml config.yaml
 use `{username}/{password}/{host}` templates that `wildlife.config` interpolates
 at load time, and `~` / `$ENV` in the storage paths are expanded automatically.
 
+### Test mode (no cameras)
+
+Run the whole app — gallery + Live tab — against a built-in test video, with no
+real cameras and without touching your `config.yaml`:
+
+```bash
+./scripts/run_demo.sh                 # virtual test pattern, seeded gallery, http://localhost:8080
+./scripts/run_demo.sh --source mux    # a real public video feed in the Live tab
+./scripts/run_demo.sh --detect        # also run a one-shot capture -> YOLO on the feed
+```
+
+It starts go2rtc against the test source, launches the gallery with the Live tab
+on, seeds some synthetic captures so the grid has content, prints the URLs, and
+cleans everything up on `Ctrl-C`. All demo state lives in `./.demo` (gitignored).
+Flags: `--source virtual|mux|<go2rtc-source>`, `--port N`, `--seed N`, `--detect`.
+
 ---
 
 ## On-device build & test order (from spec section 7)
