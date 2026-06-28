@@ -1,0 +1,172 @@
+"""Configuration loading and validation for the wildlife detection system.
+
+Parses ``config.yaml`` (mirrors ``config.example.yaml`` field-for-field) into a
+validated :class:`Config` tree using pydantic v2. Responsibilities beyond plain
+type checking:
+
+* Interpolate ``{username}``/``{password}``/``{host}`` templates into each
+  camera's RTSP URLs.
+* Expand ``~`` and ``$ENV`` references in storage paths to absolute
+  :class:`pathlib.Path` values.
+* Enforce sensible numeric ranges (confidence in ``0..1``, ports in
+  ``1..65535``, ``burst_frames >= 1``, box-area fraction in ``0..1`` ...).
+
+This module depends only on pydantic v2 and PyYAML. It MUST NOT import
+``torch``/``cv2``/``numpy`` so it stays importable in hardware-free tests.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+__all__ = [
+    "CameraConfig",
+    "CaptureConfig",
+    "DetectionConfig",
+    "DedupeConfig",
+    "StorageConfig",
+    "RetentionConfig",
+    "GalleryConfig",
+    "ResourceGuardConfig",
+    "Config",
+    "load_config",
+]
+
+
+class CameraConfig(BaseModel):
+    """A single camera's connection details and RTSP stream templates."""
+
+    id: str
+    host: str
+    username: str
+    password: str
+    rtsp_main: str
+    rtsp_sub: str
+    onvif_port: int = Field(default=8000, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def _interpolate_rtsp(self) -> "CameraConfig":
+        """Fill ``{username}``/``{password}``/``{host}`` into the RTSP URLs.
+
+        Templates are only formatted when they actually contain a ``{`` so that
+        fully-resolved URLs pass through untouched (and are idempotent if the
+        model is validated twice).
+        """
+        if "{" in self.rtsp_main:
+            self.rtsp_main = self.rtsp_main.format(
+                username=self.username, password=self.password, host=self.host
+            )
+        if "{" in self.rtsp_sub:
+            self.rtsp_sub = self.rtsp_sub.format(
+                username=self.username, password=self.password, host=self.host
+            )
+        return self
+
+
+class CaptureConfig(BaseModel):
+    """RTSP burst-grab behaviour for a single event."""
+
+    burst_frames: int = Field(ge=1)
+    burst_interval_ms: int = Field(ge=0)
+    stream: Literal["main", "sub"]
+    rtsp_timeout_s: int = Field(ge=1)
+    max_concurrent: int = Field(ge=1)
+
+
+class DetectionConfig(BaseModel):
+    """YOLO model selection, device, and the animal-class / confidence gate."""
+
+    model_path: str
+    device: Literal["mps", "cpu"]
+    animal_classes: list[str]
+    confidence_threshold: float = Field(ge=0.0, le=1.0)
+    min_box_area_frac: float = Field(ge=0.0, le=1.0)
+    save_best_only: bool
+
+
+class DedupeConfig(BaseModel):
+    """Per-camera cooldown to suppress re-triggers."""
+
+    cooldown_s: int = Field(ge=0)
+
+
+class StorageConfig(BaseModel):
+    """On-disk capture directory, SQLite path, and image encoding settings."""
+
+    captures_dir: Path
+    db_path: Path
+    jpeg_quality: int = Field(default=85, ge=1, le=100)
+    thumbnail_px: int = Field(default=320, ge=1)
+
+    @field_validator("captures_dir", "db_path", mode="before")
+    @classmethod
+    def _expand_path(cls, value: str | Path) -> Path:
+        """Expand ``~`` and environment variables, returning an absolute-ish Path.
+
+        Runs in ``before`` mode so the raw string (which may contain ``~`` or
+        ``$VARS``) is expanded prior to pydantic coercing it to :class:`Path`.
+        """
+        return Path(os.path.expandvars(os.path.expanduser(str(value))))
+
+
+class RetentionConfig(BaseModel):
+    """Pruning policy applied by ``scripts/prune.py``."""
+
+    max_age_days: int = Field(ge=0)
+    min_confidence_keep: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class GalleryConfig(BaseModel):
+    """Flask gallery bind address and pagination."""
+
+    host: str
+    port: int = Field(ge=1, le=65535)
+    page_size: int = Field(ge=1)
+
+
+class ResourceGuardConfig(BaseModel):
+    """Co-tenancy throttles to stay polite alongside the media server."""
+
+    detect_every_nth_event: int = Field(default=1, ge=1)
+    max_burst_per_minute: int = Field(default=20, ge=1)
+
+
+class Config(BaseModel):
+    """Top-level validated configuration tree for the whole system."""
+
+    cameras: list[CameraConfig]
+    event_source: Literal["reolink_native", "onvif_bridge"]
+    capture: CaptureConfig
+    detection: DetectionConfig
+    dedupe: DedupeConfig
+    storage: StorageConfig
+    retention: RetentionConfig
+    gallery: GalleryConfig
+    resource_guard: ResourceGuardConfig
+
+
+def load_config(path: str | Path) -> Config:
+    """Load and validate a YAML config file into a :class:`Config`.
+
+    Reads the file at ``path`` with :func:`yaml.safe_load` and validates the
+    resulting mapping via :meth:`Config.model_validate`. All interpolation,
+    path expansion, and range checks happen during validation.
+
+    Args:
+        path: Filesystem path to the YAML configuration file.
+
+    Returns:
+        A fully validated :class:`Config` instance.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        pydantic.ValidationError: If the data fails schema/range validation.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    return Config.model_validate(data)

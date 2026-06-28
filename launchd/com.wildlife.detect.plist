@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Wildlife Detection - detection worker LaunchDaemon
+  ===========================================================================
+
+  This LaunchDaemon runs the detection worker (event listeners + capture +
+  YOLO inference + SQLite store). It is a LaunchDaemon (not a LaunchAgent) so
+  it starts at BOOT without any interactive login session and keeps running
+  headless on the always-on Mac mini.
+
+  -------------------------------------------------------------------------
+  EDIT BEFORE INSTALLING
+  -------------------------------------------------------------------------
+  The absolute paths below assume the deploy user is "ry" and the repo lives
+  at /Users/ry/repos/wildlifedetection. If your username or repo location
+  differs, update EVERY path below (ProgramArguments, WorkingDirectory,
+  StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
+  EnvironmentVariables) to match your machine.
+
+  This plist expects a virtualenv at <repo>/.venv with the package installed
+  (e.g. `python3 -m venv .venv && .venv/bin/pip install -e .`), which provides
+  the `wildlife-worker` console-script entry point.
+
+  -------------------------------------------------------------------------
+  INSTALL
+  -------------------------------------------------------------------------
+    # 1. Copy into the system-wide LaunchDaemons directory:
+    sudo cp launchd/com.wildlife.detect.plist /Library/LaunchDaemons/
+
+    # 2. LaunchDaemons must be owned by root:wheel and not group/world writable:
+    sudo chown root:wheel /Library/LaunchDaemons/com.wildlife.detect.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.wildlife.detect.plist
+
+    # 3. Make sure the log directory exists and is writable by the run user:
+    mkdir -p /Users/ry/wildlife/logs
+
+    # 4. Load (and start, because RunAtLoad=true) the daemon:
+    sudo launchctl load /Library/LaunchDaemons/com.wildlife.detect.plist
+
+  -------------------------------------------------------------------------
+  MANAGE
+  -------------------------------------------------------------------------
+    # Stop + unload:
+    sudo launchctl unload /Library/LaunchDaemons/com.wildlife.detect.plist
+
+    # Check status (look for the label):
+    sudo launchctl list | grep com.wildlife
+
+    # Tail the logs:
+    tail -f /Users/ry/wildlife/logs/detect.out.log \
+            /Users/ry/wildlife/logs/detect.err.log
+
+  Notes:
+    * LaunchDaemons run as root by default; UserName below makes the process
+      run as "ry" so "~" and the captures dir resolve to that account.
+    * KeepAlive=true relaunches the worker if it crashes; RunAtLoad=true starts
+      it immediately on load and at every boot.
+  ===========================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wildlife.detect</string>
+
+    <!-- Run as the deploy user (EDIT to your username) so ~ resolves correctly. -->
+    <key>UserName</key>
+    <string>ry</string>
+
+    <!-- The detection worker entry point installed into the venv. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ry/repos/wildlifedetection/.venv/bin/wildlife-worker</string>
+    </array>
+
+    <!-- cwd so relative paths (config.yaml, models/) resolve against the repo. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/ry/repos/wildlifedetection</string>
+
+    <!-- Start at boot / on load. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch automatically if the worker exits or crashes. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Be a polite co-tenant with the media server: run at a lowered priority. -->
+    <key>Nice</key>
+    <integer>5</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
+    <key>StandardOutPath</key>
+    <string>/Users/ry/wildlife/logs/detect.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ry/wildlife/logs/detect.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Homebrew (Apple Silicon) on PATH so FFmpeg/ffprobe are found for RTSP/HEVC. -->
+        <key>PATH</key>
+        <string>/Users/ry/repos/wildlifedetection/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- HOME so "~" in config (captures_dir, db_path) expands to the deploy user. -->
+        <key>HOME</key>
+        <string>/Users/ry</string>
+        <!-- Unbuffered Python so log lines flush promptly. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <!-- Optional: point at an explicit config file if not using ./config.yaml. -->
+        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/ry/repos/wildlifedetection/config.yaml</string> -->
+    </dict>
+</dict>
+</plist>
