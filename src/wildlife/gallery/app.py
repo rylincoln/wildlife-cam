@@ -42,6 +42,7 @@ from flask import (
 
 from wildlife.config import Config, load_config
 from wildlife.store import Store
+from wildlife.remote import capability as _cap
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,52 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             except Exception:  # noqa: BLE001 - keep serving the last good config
                 logger.exception("Failed to reload %s; keeping previous config", config_path)
         return _cfg_cache["config"]
+
+    _rate_limiter = _cap.RateLimiter()
+
+    def _via_tunnel() -> bool:
+        """True when the request arrived via the local cloudflared connector AND
+        remote access is enabled -- i.e. the shared-secret gate applies. LAN
+        clients (non-loopback remote_addr) and remote-disabled configs are False."""
+        return get_config().remote.enabled and _cap.is_loopback(request.remote_addr)
+
+    @app.before_request
+    def _remote_gate():
+        if not _via_tunnel():
+            return None  # LAN or remote-disabled -> unchanged behavior
+        remote = get_config().remote
+        path = request.path
+        if remote.block_admin and (path == "/admin" or path.startswith("/admin/")):
+            abort(404)  # /admin is never reachable over the tunnel
+        if path.startswith("/static/"):
+            return None  # styling assets carry no data; keep the shared page rendered
+        if not remote.share_secret_hash:
+            logger.warning("remote.enabled but no share_secret_hash set; run wildlife-share-secret")
+            abort(404)  # fail closed
+        ip = request.headers.get("Cf-Connecting-IP") or request.remote_addr
+        if _rate_limiter.blocked(ip):
+            abort(404)  # treat a rate-limited IP exactly like a bad key (no oracle)
+        provided = request.args.get("key")
+        if _cap.secret_ok(remote.share_secret_hash, provided):
+            _rate_limiter.reset(ip)
+            g._set_share_cookie = provided  # emitted in after_request
+            return None
+        if _cap.secret_ok(remote.share_secret_hash, request.cookies.get(_cap.COOKIE_NAME)):
+            return None
+        if provided is not None:
+            _rate_limiter.record_fail(ip)
+        abort(404)
+
+    @app.after_request
+    def _remote_headers(resp):
+        if getattr(g, "_set_share_cookie", None):
+            resp.set_cookie(
+                _cap.COOKIE_NAME, g._set_share_cookie,
+                max_age=60 * 60 * 24 * 90, secure=True, httponly=True, samesite="Lax",
+            )
+        if get_config().remote.enabled:
+            resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
 
     def _new_store() -> Store:
         return Store(
