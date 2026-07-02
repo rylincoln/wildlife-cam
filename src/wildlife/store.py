@@ -87,6 +87,11 @@ def _iso(ts: datetime | str) -> str:
     return str(ts)
 
 
+def _now_iso() -> str:
+    """Timestamp for human edits, matching the ISO8601 TEXT convention."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def _sanitize(part: str) -> str:
     """Make a string safe to embed in a filename path segment."""
     return "".join(c if c.isalnum() or c in ("-", ".") else "_" for c in part)
@@ -488,6 +493,80 @@ class Store:
                 self._conn.commit()
                 total += cur.rowcount
         _sweep_empty_capture_dirs(self.captures_dir, swept)
+        return total
+
+    # ------------------------------------------------------------ update path
+    def update_label(self, capture_id: int, new_label: str) -> dict[str, Any] | None:
+        """Reclassify one capture. Records ``original_label`` on first edit.
+
+        Returns the updated row dict, or None if ``capture_id`` does not exist.
+        Raises ValueError on a blank label (the DB column is NOT NULL and must
+        never receive an empty string).
+        """
+        label = (new_label or "").strip()
+        if not label:
+            raise ValueError("new_label must be a non-empty string")
+        with self._write_lock:
+            cur = self._conn.execute(
+                """
+                UPDATE captures
+                   SET original_label = COALESCE(original_label, label),
+                       label = ?, reviewed = 1, reviewed_at = ?
+                 WHERE id = ?
+                """,
+                (label, _now_iso(), capture_id),
+            )
+            self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get(capture_id)
+
+    def update_label_many(self, ids: Iterable[int], new_label: str) -> int:
+        """Reclassify many captures. Returns the number of rows touched."""
+        label = (new_label or "").strip()
+        if not label:
+            raise ValueError("new_label must be a non-empty string")
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        now = _now_iso()
+        total = 0
+        with self._write_lock:
+            for chunk in _chunked(id_list, 900):
+                placeholders = ",".join("?" for _ in chunk)
+                cur = self._conn.execute(
+                    f"""
+                    UPDATE captures
+                       SET original_label = COALESCE(original_label, label),
+                           label = ?, reviewed = 1, reviewed_at = ?
+                     WHERE id IN ({placeholders})
+                    """,
+                    [label, now, *chunk],
+                )
+                total += cur.rowcount
+            self._conn.commit()
+        return total
+
+    def mark_reviewed_many(self, ids: Iterable[int]) -> int:
+        """Mark many captures reviewed without changing their label.
+
+        Returns the number newly marked (rows already reviewed are not counted).
+        """
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        now = _now_iso()
+        total = 0
+        with self._write_lock:
+            for chunk in _chunked(id_list, 900):
+                placeholders = ",".join("?" for _ in chunk)
+                cur = self._conn.execute(
+                    f"UPDATE captures SET reviewed = 1, reviewed_at = ? "
+                    f"WHERE id IN ({placeholders}) AND reviewed = 0",
+                    [now, *chunk],
+                )
+                total += cur.rowcount
+            self._conn.commit()
         return total
 
     # ------------------------------------------------------------- lifecycle
