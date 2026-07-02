@@ -16,13 +16,14 @@
         <a class="nav-link{% if ep == 'admin.dashboard' %} active{% endif %}" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
         <a class="nav-link{% if ep == 'admin.detection' %} active{% endif %}" href="{{ url_for('admin.detection') }}">Detection</a>
         <a class="nav-link{% if ep.startswith('admin.camera') %} active{% endif %}" href="{{ url_for('admin.cameras') }}">Cameras</a>
+        <a class="nav-link{% if ep.startswith('admin.capture') %} active{% endif %}" href="{{ url_for('admin.captures_index') }}">Captures</a>
         <a class="nav-link{% if ep == 'admin.password' %} active{% endif %}" href="{{ url_for('admin.password') }}">Password</a>
         <a class="nav-link" href="{{ url_for('index') }}">&#8592; Gallery</a>
       </nav>
     </div>
   </header>
 
-  <main class="admin-main">
+  <main class="{% block main_class %}admin-main{% endblock %}">
     {% with msgs = get_flashed_messages(with_categories=true) %}
       {% for cat, msg in msgs %}
       <div class="banner {{ 'banner-ok' if cat == 'ok' else 'banner-err' }}">{{ msg }}</div>

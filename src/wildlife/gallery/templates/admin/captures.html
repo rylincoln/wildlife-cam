@@ -1,0 +1,80 @@
+{% extends "admin/base.html" %}
+{% block title %}Captures{% endblock %}
+{% block main_class %}admin-main admin-main-wide{% endblock %}
+
+{% block content %}
+<form class="filters" method="get" action="{{ url_for('admin.captures_index') }}">
+  <label class="field"><span>Camera</span>
+    <select name="camera">
+      <option value="">All cameras</option>
+      {% for cam in cameras %}
+      <option value="{{ cam }}" {% if filters.camera == cam %}selected{% endif %}>{{ cam }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Class</span>
+    <select name="label">
+      <option value="">All classes</option>
+      {% for lbl in labels %}
+      <option value="{{ lbl }}" {% if filters.label == lbl %}selected{% endif %}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Review</span>
+    <select name="reviewed">
+      <option value="" {% if not reviewed %}selected{% endif %}>All</option>
+      <option value="unreviewed" {% if reviewed == 'unreviewed' %}selected{% endif %}>Unreviewed</option>
+      <option value="reviewed" {% if reviewed == 'reviewed' %}selected{% endif %}>Reviewed</option>
+    </select>
+  </label>
+  <label class="field"><span>From</span><input type="date" name="start" value="{{ filters.start_raw }}"></label>
+  <label class="field"><span>To</span><input type="date" name="end" value="{{ filters.end_raw }}"></label>
+  <div class="field actions">
+    <button type="submit" class="btn primary">Apply</button>
+    <a class="btn ghost" href="{{ url_for('admin.captures_index') }}">Reset</a>
+  </div>
+</form>
+
+<p class="muted">{{ total }} capture{{ '' if total == 1 else 's' }} match.</p>
+
+{% if not captures %}
+<div class="empty"><p>No captures match these filters.</p></div>
+{% endif %}
+
+<section id="grid" class="grid" aria-live="polite">
+  {% for c in captures %}
+  <article class="card" data-id="{{ c.id }}" data-full="{{ c.image_url }}"
+           data-label="{{ c.label }}" data-confidence="{{ c.confidence }}"
+           data-camera="{{ c.camera_id }}" data-ts="{{ c.capture_ts }}">
+    <img class="thumb" loading="lazy" src="{{ c.thumb_url }}" alt="{{ c.label }} on {{ c.camera_id }}">
+    {% if c.reviewed %}<span class="pill pill-ok card-reviewed">reviewed</span>{% endif %}
+    <div class="meta">
+      <span class="label">{{ c.label }}</span>
+      <span class="conf">{{ (c.confidence * 100) | round(0) | int }}%</span>
+      <span class="cam">{{ c.camera_id }}</span>
+      <span class="ts">{{ (c.capture_ts or '')[:19] | replace('T', ' ') }}</span>
+    </div>
+    <div class="card-actions">
+      <form method="post" action="{{ url_for('admin.capture_reclassify', capture_id=c.id) }}">
+        <select name="new_label" aria-label="Reclassify">
+          {% for lbl in reclassify_labels %}
+          <option value="{{ lbl }}" {% if lbl == c.label %}selected{% endif %}>{{ lbl }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn ghost">Relabel</button>
+      </form>
+      <form method="post" action="{{ url_for('admin.capture_delete', capture_id=c.id) }}"
+            onsubmit="return confirm('Delete capture #{{ c.id }}? This removes the image files and cannot be undone.');">
+        <button type="submit" class="btn danger">Delete</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+
+<div class="pager">
+  {% if page > 1 %}<a class="btn ghost" href="{{ url_for('admin.captures_index', page=page-1, **query_args) }}">&#8249; Prev</a>{% else %}<span class="btn ghost" aria-disabled="true">&#8249; Prev</span>{% endif %}
+  <span class="muted">Page {{ page }}</span>
+  {% if has_more %}<a class="btn ghost" href="{{ url_for('admin.captures_index', page=page+1, **query_args) }}">Next &#8250;</a>{% else %}<span class="btn ghost" aria-disabled="true">Next &#8250;</span>{% endif %}
+</div>
+{% endblock %}
