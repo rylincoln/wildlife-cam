@@ -336,6 +336,11 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 
 ### One-time setup
 
+> On the production Mac mini you can run `./scripts/setup_remote.sh` (after creating a
+> tunnel in the dashboard and exporting `CF_TUNNEL_TOKEN`) to do the host-side setup —
+> it configures `config.yaml`, mints the share secret, regenerates `go2rtc.yaml`,
+> restarts services, and prints the remaining dashboard/camera steps with values filled in.
+
 1. `brew install cloudflared` (keep current: `brew upgrade cloudflared`).
 2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create → Cloudflared → name
    it; copy the token; `sudo cloudflared service install <TOKEN>` (boot daemon).
@@ -344,7 +349,7 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
    - `cam` . `rlblais.org`, (no path) → HTTP `localhost:8080`
 4. In `config.yaml` set `remote.base_url: "https://cam.rlblais.org"` and
    `livestream.base_path: "/go2rtc"`; regenerate go2rtc config
-   (`wildlife-stream-config`) and restart the gallery + go2rtc.
+   (`wildlife-stream-config`) and restart go2rtc; the gallery picks up `config.yaml` changes automatically.
 5. Run `wildlife-share-secret` → note the printed **share link** and **raw secret**.
 6. Add a Cloudflare **WAF custom rule**: *Block* when the path starts with `/go2rtc` and
    the `wl_key` cookie ≠ the raw secret. (Free-plan fallback: a small Cloudflare Worker on
