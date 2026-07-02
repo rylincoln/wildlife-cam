@@ -7,20 +7,27 @@ wiring lives in :mod:`wildlife.gallery.app`.
 
 from __future__ import annotations
 
+import ipaddress
+
 from werkzeug.security import check_password_hash
 
 #: Cookie carrying the validated share secret. The Cloudflare WAF rule guarding the
 #: /go2rtc path matches this exact name/value, so do not rename without updating it.
 COOKIE_NAME = "wl_key"
 
-#: The local cloudflared connector proxies the gallery from loopback, so a loopback
-#: remote_addr means "this request arrived via the tunnel".
-_LOOPBACK = frozenset({"127.0.0.1", "::1"})
-
 
 def is_loopback(remote_addr: str | None) -> bool:
-    """True if ``remote_addr`` is loopback (request arrived via cloudflared)."""
-    return remote_addr in _LOOPBACK
+    """True if ``remote_addr`` is a loopback address (request arrived via cloudflared).
+
+    Uses :mod:`ipaddress` rather than an exact string match so IPv4-mapped IPv6
+    forms (e.g. ``::ffff:127.0.0.1`` on a dual-stack bind) and all of
+    ``127.0.0.0/8`` are recognized as loopback -- avoiding a silent fail-open where
+    a real tunnel request looked non-loopback and skipped the gate.
+    """
+    try:
+        return ipaddress.ip_address(remote_addr).is_loopback
+    except (ValueError, TypeError):
+        return False
 
 
 def secret_ok(secret_hash: str | None, provided: str | None) -> bool:
