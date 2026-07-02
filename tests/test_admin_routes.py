@@ -316,6 +316,17 @@ def test_capture_reclassify_route(ctx) -> None:
     assert client.get(f"/admin/captures/{cid}/reclassify", headers=_auth()).status_code == 405
 
 
+def test_captures_page_has_bulk_ui(ctx) -> None:
+    client, cfgp = ctx
+    _seed_capture(cfgp)
+    r = client.get("/admin/captures", headers=_auth())
+    html = r.data
+    assert b'id="bulk-status"' in html
+    assert b'class="bulk-toolbar"' in html
+    assert b'class="select-box"' in html   # per-card selection checkbox
+    assert b'id="lightbox"' in html
+
+
 def test_captures_bulk_route(ctx) -> None:
     client, cfgp = ctx
     cid = _seed_capture(cfgp)  # reclassified below, then deleted last
