@@ -18,6 +18,9 @@
   </header>
 
   <main>
+    {% if remote %}
+    <p class="live-note">Live works best in Safari on iPhone/Mac. If a tile stays black, try the other quality (Sub / Main 4K) or a different browser.</p>
+    {% endif %}
     <div id="empty" class="empty" {% if cameras %}hidden{% endif %}>
       <p>No cameras configured for live view.</p>
     </div>
