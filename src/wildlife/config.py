@@ -154,7 +154,14 @@ class LivestreamConfig(BaseModel):
     rtsp_listen: str = ":8554"
     default_stream: Literal["sub", "main"] = "sub"
     allow_main: bool = True  # expose the Main toggle in the UI
-    mode: str = "webrtc,mse"  # go2rtc player tech preference
+    # go2rtc player transport per tile. NOTE: the player always prefers MSE over
+    # WebRTC whenever "mse" is present in the list (it ignores the string order),
+    # so to *force* WebRTC you must omit "mse". Reolink main is HEVC/4K (MSE plays
+    # it in Safari; WebRTC mostly can't), while the sub stream is H264 High profile
+    # which Safari's MSE rejects (bad codec string) but WebRTC decodes fine -- hence
+    # different defaults per tile.
+    main_mode: str = "webrtc,mse"  # HEVC 4K -> MSE
+    sub_mode: str = "webrtc"  # H264 High -> WebRTC (omit "mse" so it isn't chosen)
 
 
 class Config(BaseModel):

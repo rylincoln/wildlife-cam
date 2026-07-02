@@ -72,4 +72,9 @@ livestream: # optional on-demand live view via a companion go2rtc binary (detect
   rtsp_listen: ":8554" # go2rtc rtsp bind
   default_stream: sub # sub | main  (sub is lighter; main is 4K)
   allow_main: true # expose the Main 4K toggle in the UI
-  mode: "webrtc,mse" # go2rtc player tech preference
+  # go2rtc player transport per tile. The player prefers MSE whenever "mse" is in
+  # the list (order is ignored), so omit "mse" to force WebRTC. Reolink 4K main is
+  # HEVC (MSE plays it in Safari); the sub is H264 High profile which Safari MSE
+  # rejects but WebRTC decodes -- hence the split.
+  main_mode: "webrtc,mse" # HEVC 4K main -> MSE
+  sub_mode: "webrtc" # H264 High sub -> WebRTC
