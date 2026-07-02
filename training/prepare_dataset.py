@@ -115,6 +115,9 @@ def main() -> int:
     parser.add_argument("--tiers", default="1", help="Species tiers for names, e.g. '1' or '12'.")
     parser.add_argument("--no-support", action="store_true", help="Exclude person/black_bear/bird classes.")
     parser.add_argument("--group-regex", default=None, help="Regex; group 1 (or whole match) is the split key.")
+    parser.add_argument("--group-by", choices=["parent", "image"], default="parent",
+                        help="'parent' (default, burst-safe) or 'image' (per-image split, for "
+                             "sequence-less datasets like ENA24).")
     parser.add_argument("--copy", action="store_true", help="Copy images instead of symlinking.")
     args = parser.parse_args()
 
@@ -163,9 +166,12 @@ def main() -> int:
         return 1
 
     # Group images so burst/sequence frames never split across train/val.
+    # --group-by image makes each image its own group (per-image split) for
+    # datasets with no sequence/event structure.
     groups: dict[str, list[Path]] = defaultdict(list)
     for img in images:
-        groups[_group_key(img, pool, group_regex)].append(img)
+        key = str(img.relative_to(pool)) if args.group_by == "image" else _group_key(img, pool, group_regex)
+        groups[key].append(img)
 
     split_counts = Counter()
     class_counts: dict[str, Counter] = {"train": Counter(), "val": Counter()}
