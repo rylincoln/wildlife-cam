@@ -311,3 +311,65 @@ def test_thumbnail_is_smaller(tmp_path: Path) -> None:
         assert thumb_abs.stat().st_size < image_abs.stat().st_size
     finally:
         store.close()
+
+
+def test_new_columns_present_and_defaulted(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+        )
+        row = store.get(cid)
+        assert row["reviewed"] == 0
+        assert row["original_label"] is None
+        assert "reviewed_at" in row
+    finally:
+        store.close()
+
+
+def test_busy_timeout_set_per_connection(tmp_path: Path) -> None:
+    # A Store that never called init_schema must still have busy_timeout.
+    store = Store(db_path=tmp_path / "captures.db", captures_dir=tmp_path / "captures")
+    try:
+        assert store._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        # busy_timeout alone is a weak assertion (sqlite3.connect's default
+        # timeout=5.0 already yields 5000). synchronous defaults to FULL=2, and
+        # our __init__ sets it to NORMAL=1, so this genuinely pins the
+        # per-connection PRAGMA block: it fails if that line is removed.
+        assert store._conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+    finally:
+        store.close()
+
+
+def test_migration_adds_columns_to_old_db(tmp_path: Path) -> None:
+    import sqlite3
+    db = tmp_path / "captures.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id TEXT NOT NULL, event_ts TEXT NOT NULL, capture_ts TEXT NOT NULL,
+            label TEXT NOT NULL, confidence REAL NOT NULL,
+            box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL,
+            image_path TEXT NOT NULL, thumb_path TEXT NOT NULL,
+            width INTEGER, height INTEGER
+        );
+        INSERT INTO captures (camera_id,event_ts,capture_ts,label,confidence,image_path,thumb_path)
+        VALUES ('cam','2020-01-01T00:00:00','2020-01-01T00:00:00','deer',0.9,'a.jpg','a_thumb.jpg');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db_path=db, captures_dir=tmp_path / "captures")
+    try:
+        store.init_schema()  # ALTER-adds the 3 columns without error
+        row = store.get(1)
+        assert row["reviewed"] == 0
+        assert row["original_label"] is None
+        assert "reviewed_at" in row
+        store.init_schema()  # idempotent second run — no error
+    finally:
+        store.close()

@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS captures (
     box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL,
     image_path  TEXT    NOT NULL,   -- relative to captures_dir
     thumb_path  TEXT    NOT NULL,
-    width INTEGER, height INTEGER
+    width INTEGER, height INTEGER,
+    original_label TEXT,               -- model's label before a human reclassify
+    reviewed       INTEGER NOT NULL DEFAULT 0,
+    reviewed_at    TEXT                -- ISO8601 of the last human action
 );
 CREATE INDEX IF NOT EXISTS idx_capture_ts ON captures(capture_ts);
 CREATE INDEX IF NOT EXISTS idx_camera     ON captures(camera_id);
@@ -63,6 +66,16 @@ _COLUMNS: tuple[str, ...] = (
     "thumb_path",
     "width",
     "height",
+    "original_label",
+    "reviewed",
+    "reviewed_at",
+)
+
+# Columns added after the original schema; applied idempotently by _migrate().
+_COLUMN_ADDITIONS: tuple[tuple[str, str], ...] = (
+    ("original_label", "TEXT"),
+    ("reviewed", "INTEGER NOT NULL DEFAULT 0"),
+    ("reviewed_at", "TEXT"),
 )
 
 
@@ -114,18 +127,40 @@ class Store:
         # WAL mode (set in init_schema) keeps those readers from blocking.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # Serialize writes from this instance; reads remain concurrent under WAL.
+        # Per-connection PRAGMAs. busy_timeout MUST be set on every connection
+        # (not just the boot/worker one) so a gallery/admin write waits for the
+        # worker's WAL writer instead of failing immediately with "database is
+        # locked". journal_mode=WAL is persistent (file header) so it stays in
+        # init_schema; busy_timeout/synchronous are per-connection and do not.
+        self._conn.execute("PRAGMA busy_timeout=5000;")
+        self._conn.execute("PRAGMA synchronous=NORMAL;")
+        # Serialize writes from THIS instance; cross-connection writes are
+        # arbitrated by SQLite WAL + busy_timeout, not by this lock.
         self._write_lock = threading.Lock()
 
     # ----------------------------------------------------------------- schema
     def init_schema(self) -> None:
-        """Create the captures table + indexes and enable WAL mode (idempotent)."""
+        """Create the captures table + indexes, enable WAL, and migrate (idempotent)."""
         with self._write_lock:
             self._conn.execute("PRAGMA journal_mode=WAL;")
-            self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.executescript(_SCHEMA_SQL)
+            self._migrate()
             self._conn.commit()
         logger.debug("Initialised capture schema at %s", self.db_path)
+
+    def _migrate(self) -> None:
+        """Add any missing post-original columns. Safe across re-runs and races."""
+        existing = {r["name"] for r in self._conn.execute("PRAGMA table_info(captures)")}
+        for name, decl in _COLUMN_ADDITIONS:
+            if name in existing:
+                continue
+            try:
+                self._conn.execute(f"ALTER TABLE captures ADD COLUMN {name} {decl}")
+            except sqlite3.OperationalError as exc:
+                # Another process (worker vs gallery boot) added it between the
+                # check and the ALTER — a schema error busy_timeout can't absorb.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     # ------------------------------------------------------------- write path
     def save_capture(
