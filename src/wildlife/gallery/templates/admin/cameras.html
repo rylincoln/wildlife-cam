@@ -1,0 +1,31 @@
+{% extends "admin/base.html" %}
+{% block title %}Cameras{% endblock %}
+{% block content %}
+<div class="form-actions" style="margin-bottom:16px">
+  <a class="btn primary" href="{{ url_for('admin.camera_new') }}">+ Add camera</a>
+</div>
+
+{% if cameras %}
+<table class="admin-table">
+  <thead><tr><th>ID</th><th>Host</th><th>ONVIF port</th><th></th></tr></thead>
+  <tbody>
+    {% for cam in cameras %}
+    <tr>
+      <td><code>{{ cam.id }}</code></td>
+      <td>{{ cam.host }}</td>
+      <td>{{ cam.onvif_port | default(8000) }}</td>
+      <td class="row-actions">
+        <a class="btn ghost" href="{{ url_for('admin.camera_edit', cam_id=cam.id) }}">Edit</a>
+        <form method="post" action="{{ url_for('admin.camera_delete', cam_id=cam.id) }}"
+              onsubmit="return confirm('Remove camera {{ cam.id }}? This restarts the detector + go2rtc.');">
+          <button type="submit" class="btn danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No cameras yet. Add one to start detecting.</p>
+{% endif %}
+{% endblock %}

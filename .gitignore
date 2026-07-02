@@ -1,6 +1,11 @@
 # Wildlife Detection — local artifacts, never commit
 config.yaml
 go2rtc.yaml
+
+# Admin UI runtime artifacts (reload signalling + config backups)
+.reload.trigger
+.reload.status.json
+.config-backups/
 *.db
 *.db-wal
 *.db-shm

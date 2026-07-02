@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+
+{% if not reloader_installed %}
+<div class="banner banner-warn">
+  The reloader daemon isn't installed, so saved changes won't auto-apply. Install it with
+  <code>sudo bash scripts/install_launchd.sh</code>, or after each change run
+  <code>sudo launchctl kickstart -k system/com.wildlife.detect</code> and
+  <code>… com.wildlife.stream</code>.
+</div>
+{% endif %}
+
+{% if pending %}
+<div class="banner banner-warn">A config change is queued — the reloader applies it within a few seconds.</div>
+{% endif %}
+
+<div class="admin-cards">
+  <section class="panel">
+    <h2>Last apply</h2>
+    {% if status %}
+      <p>
+        <span class="pill {{ 'pill-ok' if status.ok else 'pill-err' }}">{{ 'OK' if status.ok else 'FAILED' }}</span>
+        <span class="muted">{{ status.ts }}</span>
+      </p>
+      {% if status.error %}<p class="muted">stage <code>{{ status.stage }}</code>: {{ status.error }}</p>{% endif %}
+      {% if status.restarted %}
+      <ul class="kv">
+        {% for label, detail in status.restarted.items() %}
+        <li><code>{{ label }}</code> — {{ detail }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% else %}
+      <p class="muted">No apply has run yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>Detection</h2>
+    <ul class="kv">
+      <li>Model <code>{{ cfg.detection.model_path }}</code> on <code>{{ cfg.detection.device }}</code></li>
+      <li>Confidence &ge; {{ cfg.detection.confidence_threshold }}, min box {{ cfg.detection.min_box_area_frac }}</li>
+      <li>Capture <code>{{ cfg.capture.stream }}</code> stream, {{ cfg.capture.burst_frames }} frame(s)</li>
+      <li>Classes: {{ cfg.detection.animal_classes | join(', ') }}</li>
+    </ul>
+    <a class="btn ghost" href="{{ url_for('admin.detection') }}">Edit detection</a>
+  </section>
+
+  <section class="panel">
+    <h2>Cameras ({{ cfg.cameras | length }})</h2>
+    {% if cfg.cameras %}
+    <ul class="kv">
+      {% for cam in cfg.cameras %}<li><code>{{ cam.id }}</code> — {{ cam.host }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No cameras configured.</p>
+    {% endif %}
+    <a class="btn ghost" href="{{ url_for('admin.cameras') }}">Manage cameras</a>
+  </section>
+
+  {% if warnings %}
+  <section class="panel panel-warn">
+    <h2>Warnings</h2>
+    <ul class="kv">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

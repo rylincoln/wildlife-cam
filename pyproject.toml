@@ -38,6 +38,11 @@ cameras = [
     "reolink-aio>=0.21",
     "onvif-zeep>=0.2.12",
 ]
+admin = [
+    # Round-trip YAML so the admin UI can rewrite config.yaml in place while
+    # preserving the operator's comments/formatting.
+    "ruamel.yaml>=0.18",
+]
 coreml = [
     "coremltools>=7",
 ]
@@ -50,6 +55,10 @@ dev = [
 wildlife-worker = "wildlife.worker:main"
 wildlife-gallery = "wildlife.gallery.app:main"
 wildlife-stream-config = "wildlife.stream.config_gen:main"
+# Root-run reloader triggered by launchd WatchPaths after an admin edit.
+wildlife-reload = "wildlife.reload_agent:main"
+# Set/replace the admin UI password (writes a hash into config.yaml).
+wildlife-admin-password = "wildlife.admin.passwd:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wildlife"]

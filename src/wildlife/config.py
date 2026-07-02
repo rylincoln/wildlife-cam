@@ -34,6 +34,7 @@ __all__ = [
     "GalleryConfig",
     "ResourceGuardConfig",
     "LivestreamConfig",
+    "AdminConfig",
     "Config",
     "load_config",
 ]
@@ -42,7 +43,7 @@ __all__ = [
 class CameraConfig(BaseModel):
     """A single camera's connection details and RTSP stream templates."""
 
-    id: str
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]+$", min_length=1)
     host: str
     username: str
     password: str
@@ -56,16 +57,28 @@ class CameraConfig(BaseModel):
 
         Templates are only formatted when they actually contain a ``{`` so that
         fully-resolved URLs pass through untouched (and are idempotent if the
-        model is validated twice).
+        model is validated twice). An unknown/invalid placeholder (e.g.
+        ``{channel}`` or ``{0}``) is re-raised as a ``ValueError`` so pydantic
+        turns it into a readable field error instead of leaking a raw
+        ``KeyError``/``IndexError`` to callers.
         """
-        if "{" in self.rtsp_main:
-            self.rtsp_main = self.rtsp_main.format(
-                username=self.username, password=self.password, host=self.host
-            )
-        if "{" in self.rtsp_sub:
-            self.rtsp_sub = self.rtsp_sub.format(
-                username=self.username, password=self.password, host=self.host
-            )
+        for attr in ("rtsp_main", "rtsp_sub"):
+            value = getattr(self, attr)
+            if "{" not in value:
+                continue
+            try:
+                setattr(
+                    self,
+                    attr,
+                    value.format(
+                        username=self.username, password=self.password, host=self.host
+                    ),
+                )
+            except (KeyError, IndexError) as exc:
+                raise ValueError(
+                    f"{attr} has an unknown placeholder {exc}; only "
+                    "{username}, {password} and {host} are supported"
+                ) from exc
         return self
 
 
@@ -164,6 +177,21 @@ class LivestreamConfig(BaseModel):
     sub_mode: str = "webrtc"  # H264 High -> WebRTC (omit "mse" so it isn't chosen)
 
 
+class AdminConfig(BaseModel):
+    """Optional password-gated admin UI served by the gallery.
+
+    When ``password_hash`` is set (via the ``wildlife-admin-password`` CLI), the
+    gallery exposes ``/admin`` routes for editing detection/camera config behind
+    HTTP Basic Auth. Only a Werkzeug password *hash* is stored -- the plaintext
+    is never persisted. With ``enabled`` true but no hash set, the admin routes
+    fail **closed** (403 with instructions) so a fresh deployment can't be
+    reconfigured by anyone on the LAN before a password exists.
+    """
+
+    enabled: bool = True
+    password_hash: str | None = None
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -177,6 +205,27 @@ class Config(BaseModel):
     gallery: GalleryConfig
     resource_guard: ResourceGuardConfig
     livestream: LivestreamConfig = Field(default_factory=LivestreamConfig)
+    admin: AdminConfig = Field(default_factory=AdminConfig)
+
+    @model_validator(mode="after")
+    def _unique_camera_ids(self) -> "Config":
+        """Reject duplicate camera ids -- they'd collide as dict keys downstream.
+
+        The worker keys its camera registry and go2rtc keys its streams by
+        ``camera.id``; two cameras sharing an id would silently shadow one
+        another, so fail validation loudly instead.
+        """
+        seen: set[str] = set()
+        dupes: set[str] = set()
+        for cam in self.cameras:
+            if cam.id in seen:
+                dupes.add(cam.id)
+            seen.add(cam.id)
+        if dupes:
+            raise ValueError(
+                "Duplicate camera id(s): " + ", ".join(sorted(dupes))
+            )
+        return self
 
 
 def load_config(path: str | Path) -> Config:

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wildlife Admin &middot; {% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="admin">
+  {% set ep = request.endpoint or '' %}
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#9881;&#65039;</span>
+      <h1>Wildlife Admin</h1>
+      <nav class="nav">
+        <a class="nav-link{% if ep == 'admin.dashboard' %} active{% endif %}" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
+        <a class="nav-link{% if ep == 'admin.detection' %} active{% endif %}" href="{{ url_for('admin.detection') }}">Detection</a>
+        <a class="nav-link{% if ep.startswith('admin.camera') %} active{% endif %}" href="{{ url_for('admin.cameras') }}">Cameras</a>
+        <a class="nav-link{% if ep == 'admin.password' %} active{% endif %}" href="{{ url_for('admin.password') }}">Password</a>
+        <a class="nav-link" href="{{ url_for('index') }}">&#8592; Gallery</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% for cat, msg in msgs %}
+      <div class="banner {{ 'banner-ok' if cat == 'ok' else 'banner-err' }}">{{ msg }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% if errors %}
+    <div class="banner banner-err">
+      <strong>Could not save:</strong>
+      <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

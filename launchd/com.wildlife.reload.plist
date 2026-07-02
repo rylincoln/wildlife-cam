@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Wildlife Detection - config reloader LaunchDaemon (4th service, optional)
+  ===========================================================================
+
+  This is the privileged half of the admin UI's "apply changes" flow. The
+  gallery runs as an unprivileged user and cannot restart the other daemons, so
+  when it writes a new config.yaml it *touches* a trigger file. This job watches
+  that trigger (launchd WatchPaths) and, running as ROOT, re-validates the
+  config, regenerates go2rtc.yaml, and restarts the worker + go2rtc.
+
+  It runs ONE-SHOT per trigger (no RunAtLoad, no KeepAlive): launchd starts it
+  each time the trigger file changes, it does its work, and exits.
+
+  Unlike the other daemons this one has NO UserName -- it must be root to
+  `launchctl kickstart` the system-domain worker/go2rtc services.
+
+  =========================================================================
+  EDIT BEFORE INSTALLING
+  =========================================================================
+  As with the other plists, the absolute paths assume deploy user "ry" and repo
+  /Users/ry/repos/wildlife-cam. Update EVERY path (ProgramArguments, cwd,
+  WatchPaths, StandardOut/ErrorPath, PATH/HOME) if yours differ. HOME must be the
+  deploy user's home so "~" in storage paths validates the same way it does for
+  the worker.
+
+  =========================================================================
+  INSTALL  (scripts/install_launchd.sh does all of this)
+  =========================================================================
+    sudo cp launchd/com.wildlife.reload.plist /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.wildlife.reload.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.wildlife.reload.plist
+    touch /Users/ry/repos/wildlife-cam/.reload.trigger   # WatchPaths target must exist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.wildlife.reload.plist
+
+  =========================================================================
+  MANAGE
+  =========================================================================
+    # Watch it fire (edit something in /admin, or `touch` the trigger):
+    tail -f /Users/ry/wildlife/logs/reload.out.log /Users/ry/wildlife/logs/reload.err.log
+    # Last-apply status the dashboard reads:
+    cat /Users/ry/repos/wildlife-cam/.reload.status.json
+  ===========================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wildlife.reload</string>
+
+    <!-- NO UserName: this job runs as root so it can restart the other daemons. -->
+
+    <!-- Run the reloader out of the venv. `-m` avoids depending on the
+         console-script shim being (re)generated. `-P` (Python 3.11+) stops the
+         current directory from being prepended to sys.path, so a file dropped in
+         the repo root can't shadow stdlib/package imports at root startup.
+         EDIT the python path if your venv lives elsewhere.
+
+         SECURITY NOTE: this job runs as root but executes code from the repo +
+         venv, which are owned by the (unprivileged) deploy user. That's fine
+         when that user is the box's admin (they already have sudo). For a
+         hardened multi-user host, deploy a root:wheel-only copy of the package
+         and venv (e.g. under /usr/local/wildlife, not group/world-writable) and
+         point ProgramArguments/WorkingDirectory at it with absolute paths. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ry/repos/wildlife-cam/.venv/bin/python</string>
+        <string>-P</string>
+        <string>-m</string>
+        <string>wildlife.reload_agent</string>
+        <string>config.yaml</string>
+        <string>go2rtc.yaml</string>
+    </array>
+
+    <!-- cwd so the relative config.yaml / go2rtc.yaml resolve to the repo. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/ry/repos/wildlife-cam</string>
+
+    <!-- Fire whenever the admin UI touches this trigger file. It must exist at
+         load time (install script creates it). -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/ry/repos/wildlife-cam/.reload.trigger</string>
+    </array>
+
+    <!-- One-shot: don't start on load, don't relaunch; only run on trigger. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ry/wildlife/logs/reload.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ry/wildlife/logs/reload.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- /bin + /usr/bin so `launchctl` is found; venv + Homebrew for the rest. -->
+        <key>PATH</key>
+        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- HOME must be the deploy user's home so "~" storage paths validate
+             identically to the worker (this job runs as root). -->
+        <key>HOME</key>
+        <string>/Users/ry</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>
