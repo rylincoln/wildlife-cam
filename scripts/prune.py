@@ -80,6 +80,27 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _has_reviewed_column(conn: sqlite3.Connection) -> bool:
+    """True if the captures table has the ``reviewed`` column (post-migration)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(captures)")}
+    return "reviewed" in cols
+
+
+def _build_where(cutoff_iso: str, min_conf: float, has_reviewed: bool) -> tuple[str, list]:
+    """Build the prune match predicate.
+
+    Age always applies. When ``min_conf > 0`` the confidence rule applies too,
+    but human-reviewed rows are exempt from it (a curator confirmed the capture,
+    so a low *model* confidence must not auto-delete it). Age retention still
+    applies to reviewed rows.
+    """
+    if min_conf <= 0.0:
+        return ("capture_ts < ?", [cutoff_iso])
+    if has_reviewed:
+        return ("(capture_ts < ? OR (confidence < ? AND reviewed = 0))", [cutoff_iso, float(min_conf)])
+    return ("(capture_ts < ? OR confidence < ?)", [cutoff_iso, float(min_conf)])
+
+
 def main() -> int:
     """Prune captures per the retention policy. Returns a process exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -122,19 +143,16 @@ def main() -> int:
         print(f"No database at {db_path}; nothing to prune.")
         return 0
 
-    # Build the match predicate (shared by SELECT and DELETE).
-    where = "capture_ts < ?"
-    params: list[object] = [cutoff_iso]
-    if min_conf > 0.0:
-        where = "(capture_ts < ? OR confidence < ?)"
-        params = [cutoff_iso, float(min_conf)]
-
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         if not _table_exists(conn):
             print("Database has no 'captures' table; nothing to prune.")
             return 0
+
+        # Build the match predicate (shared by SELECT and DELETE); reviewed rows
+        # are exempt from the confidence rule when the column is present.
+        where, params = _build_where(cutoff_iso, min_conf, _has_reviewed_column(conn))
 
         rows = conn.execute(
             f"SELECT id, image_path, thumb_path, capture_ts, confidence "
