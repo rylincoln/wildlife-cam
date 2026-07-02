@@ -316,25 +316,23 @@ arms the reload trigger.
   saved config changes (see [Admin](#admin-config-editor-optional)); it runs as
   **root** (no `UserName`) and is `WatchPaths`-triggered, so it stays idle until
   an edit occurs.
-- Set `<key>UserName</key>` to your account so paths under `~` and the captures
-  directory resolve to your user (LaunchDaemons run as root by default), or use
-  absolute paths in `config.yaml`.
+- The plists ship with a `__USER__` / `/Users/__USER__` placeholder (so the repo
+  carries no personal username). `scripts/install_launchd.sh` substitutes your
+  deploy user + home automatically; if you install a plist by hand, replace
+  `__USER__` first, or use absolute paths in `config.yaml`.
 - Set `RunAtLoad` **and** `KeepAlive` to `true` so they start at boot and
   relaunch on crash.
 - Point stdout/stderr to a log file under `~/wildlife/logs/`.
 
-Install and load:
+Install and load — easiest is the script (fills in `__USER__` for you):
 
 ```bash
-sudo cp launchd/com.wildlife.detect.plist   /Library/LaunchDaemons/
-sudo cp launchd/com.wildlife.gallery.plist  /Library/LaunchDaemons/
-sudo launchctl load /Library/LaunchDaemons/com.wildlife.detect.plist
-sudo launchctl load /Library/LaunchDaemons/com.wildlife.gallery.plist
+sudo bash scripts/install_launchd.sh          # installs all daemons, substituting your user
 
-# Optional third daemon: the go2rtc livestream companion (see "Live view").
-# Generate go2rtc.yaml first (wildlife-stream-config), then:
-sudo cp launchd/com.wildlife.stream.plist   /Library/LaunchDaemons/
-sudo launchctl load /Library/LaunchDaemons/com.wildlife.stream.plist
+# ...or by hand (replace __USER__ with your username first):
+sed "s/__USER__/$USER/g; s#/Users/__USER__#$HOME#g" launchd/com.wildlife.detect.plist \
+  | sudo tee /Library/LaunchDaemons/com.wildlife.detect.plist >/dev/null
+sudo launchctl load /Library/LaunchDaemons/com.wildlife.detect.plist
 ```
 
 ### Keep the Mac awake
@@ -384,3 +382,9 @@ optionally, below `retention.min_confidence_keep`). Schedule it daily via a
 - `tests/` — hardware-free unit tests.
 
 For full details, read [`spec.md`](spec.md).
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

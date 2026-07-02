@@ -9,7 +9,7 @@ description = "Fully-local, motion-triggered wildlife detection for PoE cameras 
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
-authors = [{ name = "Wildlife Detection" }]
+authors = [{ name = "Ry Blaisdell", email = "rylincoln@gmail.com" }]
 keywords = ["wildlife", "yolo", "object-detection", "reolink", "onvif", "rtsp", "apple-silicon", "mps"]
 classifiers = [
     "Programming Language :: Python :: 3",

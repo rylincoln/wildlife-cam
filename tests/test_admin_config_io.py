@@ -17,7 +17,7 @@ from wildlife.admin.config_io import ConfigError
 _BASE = """\
 cameras:
   - id: north_field
-    host: 192.168.1.71
+    host: 192.168.1.100
     username: admin
     password: "secret-pw"
     rtsp_main: "rtsp://{username}:{password}@{host}:554/Preview_01_main"  # keep me
@@ -176,7 +176,7 @@ def test_add_duplicate_id_rejected(config_path: Path) -> None:
              "rtsp_main": "rtsp://a/main", "rtsp_sub": "rtsp://a/sub", "onvif_port": 8000},
         )
     # The original camera is untouched.
-    assert cio.read_raw(config_path)["cameras"][0]["host"] == "192.168.1.71"
+    assert cio.read_raw(config_path)["cameras"][0]["host"] == "192.168.1.100"
 
 
 def test_unknown_rtsp_placeholder_rejected(config_path: Path) -> None:

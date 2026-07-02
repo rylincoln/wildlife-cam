@@ -15,11 +15,11 @@ from wildlife.admin.probe import _redact
 @pytest.mark.parametrize(
     "url",
     [
-        "rtsp://admin:simple@192.168.1.71:554/Preview_01_sub",
-        "rtsp://admin:pa/ss@192.168.1.71:554/Preview_01_sub",  # '/' in password
-        "rtsp://admin:pa?ss@192.168.1.71:554/Preview_01_sub",  # '?' in password
-        "rtsp://admin:pa#ss@192.168.1.71:554/Preview_01_sub",  # '#' in password
-        "rtsp://admin:pa:ss@192.168.1.71:554/Preview_01_sub",  # ':' in password
+        "rtsp://admin:simple@192.168.1.100:554/Preview_01_sub",
+        "rtsp://admin:pa/ss@192.168.1.100:554/Preview_01_sub",  # '/' in password
+        "rtsp://admin:pa?ss@192.168.1.100:554/Preview_01_sub",  # '?' in password
+        "rtsp://admin:pa#ss@192.168.1.100:554/Preview_01_sub",  # '#' in password
+        "rtsp://admin:pa:ss@192.168.1.100:554/Preview_01_sub",  # ':' in password
     ],
 )
 def test_password_is_masked_even_with_delimiters(url: str) -> None:
@@ -28,9 +28,9 @@ def test_password_is_masked_even_with_delimiters(url: str) -> None:
     # None of the password variants leak.
     for secret in ("simple", "pa/ss", "pa?ss", "pa#ss", "pa:ss"):
         assert secret not in out
-    assert out.startswith("rtsp://admin:****@192.168.1.71:554/")
+    assert out.startswith("rtsp://admin:****@192.168.1.100:554/")
 
 
 def test_credentialless_url_untouched() -> None:
-    url = "rtsp://192.168.1.71:554/Preview_01_sub"
+    url = "rtsp://192.168.1.100:554/Preview_01_sub"
     assert _redact(url) == url
