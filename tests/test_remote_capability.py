@@ -14,8 +14,12 @@ def test_cookie_name_constant() -> None:
 def test_is_loopback() -> None:
     assert cap.is_loopback("127.0.0.1") is True
     assert cap.is_loopback("::1") is True
+    assert cap.is_loopback("127.0.0.5") is True            # all of 127.0.0.0/8
+    assert cap.is_loopback("::ffff:127.0.0.1") is True     # IPv4-mapped (dual-stack)
     assert cap.is_loopback("192.168.1.50") is False
     assert cap.is_loopback(None) is False
+    assert cap.is_loopback("") is False
+    assert cap.is_loopback("garbage") is False
 
 
 def test_secret_ok() -> None:
