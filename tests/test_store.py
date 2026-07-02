@@ -376,6 +376,37 @@ def test_migration_adds_columns_to_old_db(tmp_path: Path) -> None:
         store.close()
 
 
+class _StaleSchemaConn:
+    """Delegates to a real connection but reports an empty table_info.
+
+    Simulates a stale schema snapshot (as a concurrent process would hold
+    after another connection added the columns), forcing _migrate to attempt
+    the ALTERs against columns that already exist.
+    """
+
+    def __init__(self, real):
+        self._real = real
+
+    def execute(self, sql, *args, **kwargs):
+        if "table_info" in sql:
+            return []
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_migrate_tolerates_concurrent_duplicate_column(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)  # fully migrated: the 3 columns already exist
+    real = store._conn
+    try:
+        store._conn = _StaleSchemaConn(real)  # pre-check now sees no columns
+        store._migrate()  # attempts ALTERs on existing columns -> must not raise
+    finally:
+        store._conn = real
+        store.close()
+
+
 def test_safe_unlink_removes_and_guards(tmp_path: Path) -> None:
     from wildlife.store import _safe_unlink
 
@@ -449,6 +480,47 @@ def test_delete_many_counts_only_removed(tmp_path: Path) -> None:
         removed = store.delete_many([ids[0], ids[1], 999, ids[0], ids[2]])
         assert removed == 3
         assert all(store.get(i) is None for i in ids)
+    finally:
+        store.close()
+
+
+def test_delete_many_spans_chunk_boundary(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        rows = [
+            ("cam", "2020-01-01T00:00:00", "2020-01-01T00:00:00", "deer", 0.9,
+             f"2020/01/01/f{i}.jpg", f"2020/01/01/f{i}_thumb.jpg")
+            for i in range(901)
+        ]
+        store._conn.executemany(
+            "INSERT INTO captures "
+            "(camera_id,event_ts,capture_ts,label,confidence,image_path,thumb_path) "
+            "VALUES (?,?,?,?,?,?,?)",
+            rows,
+        )
+        store._conn.commit()
+        ids = [r["id"] for r in store.query(limit=2000)]
+        assert len(ids) == 901
+        assert store.delete_many(ids) == 901   # sums rowcount across two chunks
+        assert store.count() == 0
+    finally:
+        store.close()
+
+
+def test_delete_many_removes_files(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+        )
+        row = store.get(cid)
+        img = store.captures_dir / row["image_path"]
+        thumb = store.captures_dir / row["thumb_path"]
+        assert img.exists() and thumb.exists()
+        assert store.delete_many([cid]) == 1
+        assert not img.exists() and not thumb.exists()
+        assert store.get(cid) is None
     finally:
         store.close()
 
