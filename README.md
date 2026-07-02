@@ -349,6 +349,20 @@ sudo pmset -a sleep 0
 
 ---
 
+## Detecting local wildlife (training)
+
+The stock COCO model only names **bear** and generic **bird** among local
+species — mule deer, elk, cougar, coyote, fox, turkey, etc. are not COCO classes,
+so `detection.animal_classes` can't filter for what the model never predicts. The
+[`training/`](training/README.md) toolchain fine-tunes a detector on
+southwest-Colorado species and exports it to Core ML; you then just point
+`detection.model_path` at the `.mlpackage` and match `animal_classes` (no code
+change). The recommended loop — auto-label with **SpeciesNet**, two-stage YOLO
+fine-tune, Core ML export — plus which public datasets to bootstrap from before
+you have your own captures, is in [`training/README.md`](training/README.md).
+
+---
+
 ## Retention
 
 `scripts/prune.py` deletes captures older than `retention.max_age_days` (and,
@@ -362,6 +376,8 @@ optionally, below `retention.min_confidence_keep`). Schedule it daily via a
 - `src/wildlife/` — the package (config, events, capture, detect, gate, store,
   worker, gallery).
 - `scripts/` — on-device test + maintenance scripts.
+- `training/` — offline toolchain to fine-tune a local-species detector (auto-label
+  → split → train → Core ML export). See [`training/README.md`](training/README.md).
 - `models/` — YOLO weights (auto-downloaded on first run; gitignored). See
   [`models/README.md`](models/README.md).
 - `launchd/` — example LaunchDaemon plists.
