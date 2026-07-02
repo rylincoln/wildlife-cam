@@ -218,8 +218,16 @@ livestream:
                            # if unset, the gallery derives it from the request host
   default_stream: sub      # sub | main  (sub is lighter; default)
   allow_main: true         # show the Main (4K) toggle in the UI
-  mode: "webrtc,mse"       # go2rtc player tech preference
+  main_mode: "webrtc,mse"  # player transport for the 4K main tile (HEVC → MSE in Safari)
+  sub_mode: "webrtc"       # player transport for the sub tile
 ```
+
+> **Reolink codec note:** the player prefers MSE whenever `mse` is listed (the
+> string order is ignored), so omit `mse` to force WebRTC. Reolink's 4K **main**
+> is HEVC — Safari plays it via **MSE** but not WebRTC — while the **sub** stream
+> is H.264 *High profile*, which Safari's **MSE** refuses (unsupported codec
+> string) but WebRTC decodes. That's why the two tiles default to different
+> transports; adjust per your cameras/browser if needed.
 
 Now browse to `http://<mac-LAN-ip>:8080/live` for a grid of all cameras, or
 `http://<mac-LAN-ip>:8080/live/<camera_id>` for a single camera. (When

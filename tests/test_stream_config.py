@@ -65,7 +65,8 @@ livestream:
   rtsp_listen: ":8553"
   default_stream: main
   allow_main: false
-  mode: "webrtc"
+  main_mode: "webrtc,mse"
+  sub_mode: "webrtc"
 """
         if with_livestream
         else ""

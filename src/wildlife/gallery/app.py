@@ -182,20 +182,23 @@ def create_app(config: Config) -> Flask:
         host = request.host.split(":")[0]
         return f"http://{host}:{ls.go2rtc_port}"
 
-    def _stream_iframe_src(base: str, stream_name: str) -> str:
+    def _stream_iframe_src(base: str, stream_name: str, mode: str) -> str:
         """Build the go2rtc ``stream.html`` embed URL for a single stream name."""
-        return f"{base}/stream.html?src={stream_name}&mode={config.livestream.mode}"
+        return f"{base}/stream.html?src={stream_name}&mode={mode}"
 
     def _camera_live(base: str, camera) -> dict:
         """Shape a camera into its ``sub``/``main`` absolute iframe URLs.
 
         Stream names follow the frozen go2rtc convention ``<id>_sub`` /
-        ``<id>_main`` so they line up with the generated ``go2rtc.yaml``.
+        ``<id>_main`` so they line up with the generated ``go2rtc.yaml``. The two
+        tiles carry independent player transports (``sub_mode`` / ``main_mode``)
+        because the sub and main streams typically use different codecs.
         """
+        ls = config.livestream
         return {
             "id": camera.id,
-            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub"),
-            "main_src": _stream_iframe_src(base, f"{camera.id}_main"),
+            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", ls.sub_mode),
+            "main_src": _stream_iframe_src(base, f"{camera.id}_main", ls.main_mode),
         }
 
     @app.route("/live")
