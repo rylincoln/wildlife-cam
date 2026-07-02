@@ -339,7 +339,7 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 > On the production Mac mini you can run `./scripts/setup_remote.sh` (after creating a
 > tunnel in the dashboard and exporting `CF_TUNNEL_TOKEN`) to do the host-side setup —
 > it configures `config.yaml`, mints the share secret, regenerates `go2rtc.yaml`,
-> restarts services, and prints the remaining dashboard/camera steps with values filled in.
+> restarts go2rtc, and prints the remaining dashboard/camera steps with values filled in.
 
 1. `brew install cloudflared` (keep current: `brew upgrade cloudflared`).
 2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create → Cloudflared → name
