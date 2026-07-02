@@ -185,6 +185,39 @@ def _sweep_empty_capture_dirs(captures_dir: Path, rels: Iterable[str]) -> int:
     return removed
 
 
+def _build_filters(
+    *,
+    camera_id: str | None,
+    label: str | None,
+    start: datetime | str | None,
+    end: datetime | str | None,
+    min_confidence: float | None,
+    reviewed: bool | None,
+) -> tuple[list[str], list[Any]]:
+    """Build the shared AND-combined WHERE clauses + params for query/count."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if camera_id is not None:
+        clauses.append("camera_id = ?")
+        params.append(camera_id)
+    if label is not None:
+        clauses.append("label = ?")
+        params.append(label)
+    if start is not None:
+        clauses.append("capture_ts >= ?")
+        params.append(_iso(start))
+    if end is not None:
+        clauses.append("capture_ts <= ?")
+        params.append(_iso(end))
+    if min_confidence is not None:
+        clauses.append("confidence >= ?")
+        params.append(float(min_confidence))
+    if reviewed is not None:
+        clauses.append("reviewed = ?")
+        params.append(1 if reviewed else 0)
+    return clauses, params
+
+
 class Store:
     """SQLite-backed metadata index plus JPEG/thumbnail writer for captures.
 
@@ -396,44 +429,48 @@ class Store:
         start: datetime | str | None = None,
         end: datetime | str | None = None,
         min_confidence: float | None = None,
+        reviewed: bool | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return matching rows as dicts, newest first.
 
         All filters are optional and AND-combined. ``start``/``end`` bound
-        ``capture_ts`` inclusively (ISO8601 strings sort chronologically, so a
-        lexical comparison is correct). Results are ordered by ``capture_ts``
-        descending (ties broken by ``id`` descending) and paginated via
-        ``limit``/``offset``.
+        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag.
+        Results are ordered by ``capture_ts`` desc (ties by ``id`` desc) and
+        paginated via ``limit``/``offset``.
         """
-        clauses: list[str] = []
-        params: list[Any] = []
-
-        if camera_id is not None:
-            clauses.append("camera_id = ?")
-            params.append(camera_id)
-        if label is not None:
-            clauses.append("label = ?")
-            params.append(label)
-        if start is not None:
-            clauses.append("capture_ts >= ?")
-            params.append(_iso(start))
-        if end is not None:
-            clauses.append("capture_ts <= ?")
-            params.append(_iso(end))
-        if min_confidence is not None:
-            clauses.append("confidence >= ?")
-            params.append(float(min_confidence))
-
+        clauses, params = _build_filters(
+            camera_id=camera_id, label=label, start=start, end=end,
+            min_confidence=min_confidence, reviewed=reviewed,
+        )
         sql = "SELECT * FROM captures"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY capture_ts DESC, id DESC LIMIT ? OFFSET ?"
         params.extend((int(limit), int(offset)))
-
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    def count(
+        self,
+        *,
+        camera_id: str | None = None,
+        label: str | None = None,
+        start: datetime | str | None = None,
+        end: datetime | str | None = None,
+        min_confidence: float | None = None,
+        reviewed: bool | None = None,
+    ) -> int:
+        """Return the number of rows matching the same filters as :meth:`query`."""
+        clauses, params = _build_filters(
+            camera_id=camera_id, label=label, start=start, end=end,
+            min_confidence=min_confidence, reviewed=reviewed,
+        )
+        sql = "SELECT COUNT(*) FROM captures"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        return int(self._conn.execute(sql, params).fetchone()[0])
 
     def distinct_cameras(self) -> list[str]:
         """Return the sorted set of camera ids present in the index."""
