@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from wildlife.models import Detection
@@ -448,5 +449,59 @@ def test_delete_many_counts_only_removed(tmp_path: Path) -> None:
         removed = store.delete_many([ids[0], ids[1], 999, ids[0], ids[2]])
         assert removed == 3
         assert all(store.get(i) is None for i in ids)
+    finally:
+        store.close()
+
+
+def test_update_label_records_provenance_once(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(label="bird"),
+        )
+        r1 = store.update_label(cid, "deer")
+        assert r1["label"] == "deer"
+        assert r1["original_label"] == "bird"   # captured on first reclassify
+        assert r1["reviewed"] == 1
+        assert r1["reviewed_at"]                 # timestamp set
+
+        r2 = store.update_label(cid, "elk")      # a -> b -> c
+        assert r2["label"] == "elk"
+        assert r2["original_label"] == "bird"    # NOT overwritten
+    finally:
+        store.close()
+
+
+def test_update_label_validation_and_missing(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+        )
+        assert store.update_label(999, "deer") is None   # unknown id
+        with pytest.raises(ValueError):
+            store.update_label(cid, "   ")                 # blank label
+    finally:
+        store.close()
+
+
+def test_bulk_update_and_mark_reviewed(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        ids = [
+            store.save_capture(
+                camera_id="cam", event_ts=datetime(2020, 1, 1),
+                capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+            )
+            for _ in range(3)
+        ]
+        assert store.update_label_many(ids, "deer") == 3
+        assert all(store.get(i)["label"] == "deer" for i in ids)
+        assert all(store.get(i)["reviewed"] == 1 for i in ids)
+
+        # All already reviewed -> mark_reviewed_many counts only 0->1 transitions.
+        assert store.mark_reviewed_many(ids) == 0
     finally:
         store.close()
