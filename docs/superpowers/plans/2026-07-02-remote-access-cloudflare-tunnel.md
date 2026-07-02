@@ -17,6 +17,7 @@
 - **Secret:** 256-bit `secrets.token_urlsafe(32)`, stored **only as a Werkzeug hash** in `config.yaml`. Cookie name is exactly `wl_key` (the Cloudflare WAF rule matches this name/value).
 - **The remote gate applies ONLY to tunnel (loopback) traffic when `remote.enabled` is true.** LAN traffic is never gated. `/admin` returns **404** over the tunnel.
 - **Camera codec (operator step, documented, no code):** each Reolink **sub-stream must be H.264 Main/Baseline** so MSE plays cross-browser incl. Safari.
+- **This dev box ≠ production.** The system runs on a separate Mac mini. All Python is hardware-free and unit-tested here; the prod-only shell script (`scripts/setup_remote.sh`, Task 7) cannot be fully executed here — it is verified with `bash -n` + `shellcheck` only, and run for real by the user on prod.
 
 ---
 
@@ -1022,6 +1023,139 @@ git commit -m "docs: remote access (Cloudflare Tunnel) setup + config example"
 
 ---
 
+### Task 7: production setup script (`scripts/setup_remote.sh`)
+
+**Files:**
+- Create: `scripts/setup_remote.sh`
+- Modify: `README.md` (point the runbook at the script)
+
+**Interfaces:** none (host orchestration). Runs on the **prod Mac mini**, from the repo root, after Tasks 1–6 are merged and the project is installed in `./.venv`. Calls `wildlife-share-secret`, `wildlife-stream-config`, and `wildlife.admin.config_io.update_sections` — all delivered by earlier tasks. Automates host-side steps; prints the dashboard/camera steps with values filled in.
+
+- [ ] **Step 1: Write the script**
+
+Create `scripts/setup_remote.sh` (make it executable: `chmod +x`):
+
+```bash
+#!/usr/bin/env bash
+#
+# setup_remote.sh -- host-side setup for Cloudflare Tunnel remote access, run on
+# the PRODUCTION Mac mini from the repo root (NOT the dev machine). Idempotent
+# where practical. Pairs with a few Cloudflare-dashboard + camera steps it prints
+# at the end with values filled in.
+#
+# Automates: install/upgrade cloudflared; connect the tunnel as a boot daemon
+# from your dashboard token; set config.yaml (remote.base_url, livestream.base_path);
+# mint the share secret; regenerate go2rtc.yaml; restart the gallery + stream services.
+#
+# Usage:
+#   HOST=cam.rlblais.org CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
+#   HOST=cam.rlblais.org ./scripts/setup_remote.sh        # host config only; prints tunnel steps
+#   ./scripts/setup_remote.sh --dry-run                   # echo actions, change nothing
+#
+set -euo pipefail
+
+HOST="${HOST:-cam.rlblais.org}"
+CONFIG="${CONFIG:-config.yaml}"
+DRY_RUN=0
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+
+run() { echo "+ $*"; [[ "$DRY_RUN" == "1" ]] || "$@"; }
+note() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+[[ "$(uname)" == "Darwin" ]] || { echo "This script is for macOS (the prod Mac mini)." >&2; exit 1; }
+[[ -f "$CONFIG" ]] || { echo "No $CONFIG here -- run from the repo root on prod." >&2; exit 1; }
+command -v brew >/dev/null || { echo "Homebrew required (https://brew.sh)." >&2; exit 1; }
+VENV="./.venv/bin"
+[[ -x "$VENV/python" ]] || { echo "No ./.venv -- install the project first (see README)." >&2; exit 1; }
+
+# 1. cloudflared
+if command -v cloudflared >/dev/null; then
+  run brew upgrade cloudflared || true
+else
+  run brew install cloudflared
+fi
+
+# 2. Connect the tunnel as a boot daemon (token from the dashboard tunnel).
+if [[ -z "${CF_TUNNEL_TOKEN:-}" ]]; then
+  note "No CF_TUNNEL_TOKEN set -- skipping the tunnel service install."
+  echo "Create a tunnel in the Cloudflare dashboard (Zero Trust -> Networks -> Tunnels),"
+  echo "copy its connector token, then re-run: CF_TUNNEL_TOKEN=... ./scripts/setup_remote.sh"
+else
+  run sudo cloudflared service install "$CF_TUNNEL_TOKEN"
+fi
+
+# 3. Wildlife config: public URL + go2rtc sub-path (comment-preserving write).
+note "Updating $CONFIG (remote.base_url, livestream.base_path)"
+run "$VENV/python" - "$CONFIG" "$HOST" <<'PY'
+import sys
+from wildlife.admin.config_io import update_sections
+update_sections(sys.argv[1], {
+    "remote": {"base_url": f"https://{sys.argv[2]}"},
+    "livestream": {"base_path": "/go2rtc"},
+})
+print("config updated")
+PY
+
+# 4. Mint the share secret (prints the share link + the raw secret).
+note "Minting the share secret"
+run "$VENV/wildlife-share-secret" "$CONFIG"
+
+# 5. Regenerate go2rtc.yaml (adds api.base_path) + restart services.
+run "$VENV/wildlife-stream-config" "$CONFIG" go2rtc.yaml
+run sudo launchctl kickstart -k system/com.wildlife.gallery || true
+run sudo launchctl kickstart -k system/com.wildlife.stream || true
+
+# 6. Finish in the Cloudflare dashboard / on the cameras.
+note "ALMOST DONE -- finish these (values filled in for you):"
+cat <<EOF
+
+A) Tunnel public hostnames (your tunnel -> Published routes) -- add TWO, /go2rtc FIRST:
+     1. Subdomain "${HOST%%.*}", Domain "${HOST#*.}", Path "go2rtc" -> HTTP  localhost:1984
+     2. Subdomain "${HOST%%.*}", Domain "${HOST#*.}", (no Path)     -> HTTP  localhost:8080
+
+B) WAF custom rule (Security -> WAF -> Custom rules -> Create):
+     Expression:  (starts_with(http.request.uri.path, "/go2rtc") and not http.request.cookies["wl_key"][0] eq "<PASTE THE RAW SECRET PRINTED ABOVE>")
+     Action:      Block
+   (Free-plan fallback: a Worker on ${HOST}/go2rtc/* that checks the wl_key cookie.)
+
+C) Cameras: set each sub-stream to H.264 Main or Baseline profile.
+
+D) SSL/TLS -> Edge Certificates: confirm Total TLS is OFF (keeps ${HOST} out of CT logs).
+
+Then, from OFF your LAN, open the printed share link and verify the gallery + live view.
+EOF
+```
+
+- [ ] **Step 2: Make it executable and syntax-check**
+
+Run: `chmod +x scripts/setup_remote.sh && bash -n scripts/setup_remote.sh`
+Expected: no output (valid syntax). This script is **prod-only** — do not execute its body here (it has no `config.yaml`, no cloudflared, and would touch `sudo`/services).
+
+- [ ] **Step 3: Lint (if shellcheck is available)**
+
+Run: `command -v shellcheck >/dev/null && shellcheck scripts/setup_remote.sh || echo "shellcheck not installed; skipped"`
+Expected: no errors (warnings acceptable; fix any that indicate real bugs). If shellcheck isn't installed, the step is a documented skip.
+
+- [ ] **Step 4: Point the README runbook at the script**
+
+In `README.md`, in the "Remote access (Cloudflare Tunnel)" section's setup steps, add a note near the top:
+
+```markdown
+> On the production Mac mini you can run `./scripts/setup_remote.sh` (after creating a
+> tunnel in the dashboard and exporting `CF_TUNNEL_TOKEN`) to do the host-side setup —
+> it configures `config.yaml`, mints the share secret, regenerates `go2rtc.yaml`,
+> restarts services, and prints the remaining dashboard/camera steps with values filled in.
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/setup_remote.sh README.md
+git commit -m "feat(remote): scripts/setup_remote.sh for prod host-side setup"
+```
+
+---
+
 ## Self-Review
 
 **1. Spec coverage** (`docs/superpowers/specs/2026-07-02-remote-access-cloudflare-tunnel-design.md`):
@@ -1035,7 +1169,8 @@ git commit -m "docs: remote access (Cloudflare Tunnel) setup + config example"
 - §7 failure modes (fail-closed, bad key 404, base_path mismatch noted, Safari hint) → Tasks 4 + 5 ✅
 - §7.3 camera H.264 Main/Baseline → Task 6 runbook ✅
 - §9 runbook, §8 security notes, CT/Total-TLS → Task 6 ✅
-- **Edge/WAF steps (tunnel creation, public hostnames, WAF rule, Total TLS)** are dashboard actions, not code — captured in the Task 6 runbook, not automated. Intentional (no Cloudflare API automation in scope).
+- Prod host-side setup automated by `scripts/setup_remote.sh` → Task 7 ✅
+- **Edge/WAF steps (dashboard hostnames, WAF rule, Total TLS) + camera codec** remain manual — captured in the Task 6 runbook and **printed by `setup_remote.sh` with values filled in** (Task 7). Intentional: no Cloudflare-API automation in scope (would need a scoped API token and is risky to ship untested from a non-prod box).
 
 **2. Placeholder scan:** No "TBD/TODO"; every code step shows complete code; test steps include real assertions. ✅
 
