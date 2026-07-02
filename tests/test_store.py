@@ -395,3 +395,58 @@ def test_safe_unlink_removes_and_guards(tmp_path: Path) -> None:
     outside.write_text("nope")
     assert _safe_unlink(captures, "../secret.txt") == (False, 0)
     assert outside.exists()
+
+
+def test_delete_removes_row_and_files(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+        )
+        row = store.get(cid)
+        img = store.captures_dir / row["image_path"]
+        thumb = store.captures_dir / row["thumb_path"]
+        assert img.exists() and thumb.exists()
+
+        assert store.delete(cid) is True
+        assert store.get(cid) is None
+        assert not img.exists() and not thumb.exists()
+        # The now-empty dated dir is swept.
+        assert not (store.captures_dir / "2020" / "01" / "01").exists()
+    finally:
+        store.close()
+
+
+def test_delete_unknown_id_and_missing_files(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        assert store.delete(999) is False  # unknown id, no exception
+        cid = store.save_capture(
+            camera_id="cam", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+        )
+        row = store.get(cid)
+        (store.captures_dir / row["image_path"]).unlink()  # file already gone
+        assert store.delete(cid) is True  # tolerates the missing file
+        assert store.get(cid) is None
+    finally:
+        store.close()
+
+
+def test_delete_many_counts_only_removed(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        ids = [
+            store.save_capture(
+                camera_id="cam", event_ts=datetime(2020, 1, 1),
+                capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+            )
+            for _ in range(3)
+        ]
+        # Two real ids + one bogus + one duplicate -> 3 rows actually removed.
+        removed = store.delete_many([ids[0], ids[1], 999, ids[0], ids[2]])
+        assert removed == 3
+        assert all(store.get(i) is None for i in ids)
+    finally:
+        store.close()

@@ -20,7 +20,7 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 from PIL import Image
@@ -141,6 +141,42 @@ def _prune_empty_dirs(root: Path) -> int:
         except OSError:
             # Non-empty or vanished concurrently; leave it be.
             pass
+    return removed
+
+
+def _chunked(seq: list, size: int) -> Iterable[list]:
+    """Yield ``seq`` in lists of at most ``size`` (for SQLite IN-clause limits)."""
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def _sweep_empty_capture_dirs(captures_dir: Path, rels: Iterable[str]) -> int:
+    """Remove now-empty ``YYYY/MM/DD`` dirs for the given relative file paths.
+
+    Scoped to the deleted captures' own dated directories (not the whole tree),
+    and skips the current day's directory because the worker may be writing
+    there. Walks up MM/YYYY so an emptied day frees its parents too. Returns the
+    number of directories removed. Never raises.
+    """
+    now = datetime.now()
+    today = (captures_dir / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}").resolve()
+    root = captures_dir.resolve()
+    day_dirs = {(captures_dir / rel).parent for rel in rels if rel}
+    removed = 0
+    for day in day_dirs:
+        for directory in (day, day.parent, day.parent.parent):
+            try:
+                resolved = directory.resolve()
+            except OSError:
+                continue
+            if resolved == today or resolved == root or root not in resolved.parents:
+                continue
+            try:
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+                    removed += 1
+            except OSError:
+                pass
     return removed
 
 
@@ -407,6 +443,52 @@ class Store:
             "SELECT DISTINCT label FROM captures ORDER BY label"
         ).fetchall()
         return [r["label"] for r in rows]
+
+    # ------------------------------------------------------------- delete path
+    def delete(self, capture_id: int) -> bool:
+        """Delete one capture: unlink both files, then remove the row.
+
+        Files are removed first (idempotently, path-guarded); the DB delete then
+        proceeds regardless of unlink outcome. Returns True if a row was removed.
+        """
+        row = self.get(capture_id)
+        if row is None:
+            return False
+        rels = [row.get("image_path"), row.get("thumb_path")]
+        for rel in rels:
+            _safe_unlink(self.captures_dir, rel)
+        with self._write_lock:
+            cur = self._conn.execute("DELETE FROM captures WHERE id = ?", (capture_id,))
+            self._conn.commit()
+        _sweep_empty_capture_dirs(self.captures_dir, [r for r in rels if r])
+        return cur.rowcount == 1
+
+    def delete_many(self, ids: Iterable[int]) -> int:
+        """Delete many captures by id. Returns the number of rows actually removed."""
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        total = 0
+        swept: list[str] = []
+        for chunk in _chunked(id_list, 900):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self._conn.execute(
+                f"SELECT image_path, thumb_path FROM captures WHERE id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                for key in ("image_path", "thumb_path"):
+                    _safe_unlink(self.captures_dir, r[key])
+                    if r[key]:
+                        swept.append(r[key])
+            with self._write_lock:
+                cur = self._conn.execute(
+                    f"DELETE FROM captures WHERE id IN ({placeholders})", chunk
+                )
+                self._conn.commit()
+                total += cur.rowcount
+        _sweep_empty_capture_dirs(self.captures_dir, swept)
+        return total
 
     # ------------------------------------------------------------- lifecycle
     def close(self) -> None:
