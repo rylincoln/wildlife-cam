@@ -46,6 +46,15 @@ admin = [
 coreml = [
     "coremltools>=7",
 ]
+# Offline model-training tooling (training/ dir): fine-tune + Core ML export.
+train = [
+    "ultralytics>=8.3",
+    "coremltools>=8",
+]
+# Auto-labeling captures/datasets with SpeciesNet (bundles MegaDetector).
+autolabel = [
+    "speciesnet>=5",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.4",
