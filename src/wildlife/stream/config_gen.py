@@ -62,9 +62,13 @@ def build_go2rtc_config(config: Config) -> dict:
         streams[f"{camera.id}_main"] = [camera.rtsp_main]
         streams[f"{camera.id}_sub"] = [camera.rtsp_sub]
 
+    api: dict = {"listen": ls.api_listen}
+    if ls.base_path:
+        api["base_path"] = ls.base_path
+
     return {
         "streams": streams,
-        "api": {"listen": ls.api_listen},
+        "api": api,
         "webrtc": {"listen": ls.webrtc_listen},
         "rtsp": {"listen": ls.rtsp_listen},
         "log": {"level": "info", "format": "color"},
