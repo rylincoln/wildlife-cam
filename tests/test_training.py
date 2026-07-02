@@ -161,6 +161,54 @@ def test_category_mapping_and_empty() -> None:
     assert convert_lila._map_category("American Black Bear", active) == "black_bear"
     assert convert_lila._map_category("empty", active) == convert_lila._EMPTY
     assert convert_lila._map_category("Domestic Dog", active) is None  # unmapped -> skip
+    # ENA24-specific names map onto Tier-2 targets rather than being dropped.
+    assert convert_lila._map_category("Eastern Gray Squirrel", active) == "tree_squirrel"
+    assert convert_lila._map_category("Eastern Cottontail", active) == "cottontail"
+    assert convert_lila._map_category("American Crow", active) == "bird"
+
+
+def test_convert_skips_missing_source(tmp_path: Path) -> None:
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    (imgs / "f1.jpg").write_bytes(b"x")  # present; f2 is referenced but absent
+    cct = {
+        "categories": [{"id": 1, "name": "American Black Bear"}],
+        "images": [{"id": "a", "file_name": "f1.jpg", "width": 100, "height": 100, "seq_id": "S"},
+                   {"id": "b", "file_name": "gone.jpg", "width": 100, "height": 100, "seq_id": "S"}],
+        "annotations": [{"id": "1", "image_id": "a", "category_id": 1, "bbox": [10, 20, 30, 40]},
+                        {"id": "2", "image_id": "b", "category_id": 1, "bbox": [0, 0, 10, 10]}],
+    }
+    cctp = tmp_path / "c.json"
+    cctp.write_text(__import__("json").dumps(cct))
+    out = tmp_path / "out"
+    r = subprocess.run(
+        [sys.executable, str(_TRAINING / "convert_lila.py"), "--images", str(imgs),
+         "--cct", str(cctp), "--out", str(out), "--tiers", "1"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "skip_missing: 1" in r.stdout
+    assert (out / "S" / "f1.txt").exists()          # present image labeled
+    assert not (out / "S" / "gone.txt").exists()    # missing source -> no broken symlink/label
+
+
+def test_prepare_group_by_image_splits_flat_pool(tmp_path: Path) -> None:
+    # A sequence-less (flat) pool would be a degenerate single group by default;
+    # --group-by image splits per-image so both sides populate.
+    pool = tmp_path / "pool" / "misc"
+    pool.mkdir(parents=True)
+    cls = species.training_classes(("1",))
+    deer = cls.index("mule_deer")
+    for i in range(20):
+        (pool / f"{i}.jpg").write_bytes(b"x")
+        (pool / f"{i}.txt").write_text(f"{deer} 0.5 0.5 0.2 0.2\n")
+
+    out = tmp_path / "ds"
+    r = _prep(tmp_path / "pool", out, "--group-by", "image", "--val-frac", "0.3")
+    assert r.returncode == 0, r.stderr
+    n_train = len(list((out / "images" / "train").rglob("*.jpg")))
+    n_val = len(list((out / "images" / "val").rglob("*.jpg")))
+    assert n_train and n_val and n_train + n_val == 20
 
 
 def test_convert_lila_native_boxes_and_skips(tmp_path: Path) -> None:

@@ -50,7 +50,11 @@ _ALIASES: dict[str, str] = {
     "raccoon": "raccoon", "northern_raccoon": "raccoon",
     "skunk": "striped_skunk", "striped_skunk": "striped_skunk",
     "squirrel": "tree_squirrel", "tree_squirrel": "tree_squirrel",
-    "rabbit": "cottontail", "cottontail": "cottontail", "snowshoe_hare": "snowshoe_hare",
+    "eastern_gray_squirrel": "tree_squirrel", "eastern_fox_squirrel": "tree_squirrel",
+    "gray_squirrel": "tree_squirrel", "fox_squirrel": "tree_squirrel",
+    "rabbit": "cottontail", "cottontail": "cottontail", "eastern_cottontail": "cottontail",
+    "snowshoe_hare": "snowshoe_hare",
+    "american_crow": "bird", "crow": "bird", "raven": "bird", "magpie": "bird",
     "porcupine": "porcupine", "marmot": "yellow_bellied_marmot",
     "yellow_bellied_marmot": "yellow_bellied_marmot",
     "badger": "badger", "american_badger": "badger",
@@ -121,23 +125,26 @@ def main() -> int:
     stats = Counter()
     unmapped: Counter = Counter()
 
-    def _emit(image: dict, lines: list[str]) -> None:
+    def _emit(image: dict, lines: list[str]) -> bool:
+        """Materialize one image + label; return False if the source is missing."""
         file_name = image["file_name"]
+        src_img = images_root / file_name
+        if not src_img.is_file():
+            return False  # e.g. privacy-removed images absent from the public zip
         group = str(image.get("seq_id") or image.get("location") or "misc")
         safe = file_name.replace("/", "__").replace("\\", "__")
         dst_img = out / group / safe
         dst_img.parent.mkdir(parents=True, exist_ok=True)
-        src_img = images_root / file_name
         if dst_img.exists() or dst_img.is_symlink():
             dst_img.unlink()
         if args.copy:
             import shutil
 
-            if src_img.is_file():
-                shutil.copy2(src_img, dst_img)
+            shutil.copy2(src_img, dst_img)
         else:
             os.symlink(src_img, dst_img)
         dst_img.with_suffix(".txt").write_text(("\n".join(lines) + "\n") if lines else "")
+        return True
 
     for img_id, image in images.items():
         anns = anns_by_img.get(img_id, [])
@@ -153,8 +160,7 @@ def main() -> int:
         # Pure-empty image -> background negative. Require a non-empty list so a
         # *zero-annotation* image (unknown content) isn't a vacuous-True background.
         if mapped_cats and all(m == _EMPTY for m in mapped_cats):
-            _emit(image, [])
-            stats["background"] += 1
+            stats["background" if _emit(image, []) else "skip_missing"] += 1
             continue
 
         lines: list[str] = []
@@ -199,13 +205,12 @@ def main() -> int:
                 lines.append(f"{cls_index[only_cls]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
 
         if lines:
-            _emit(image, lines)
-            stats["labeled"] += 1
+            stats["labeled" if _emit(image, lines) else "skip_missing"] += 1
         else:
             stats["skip_no_boxes"] += 1
 
     print(f"Converted into {out}")
-    for k in ("labeled", "background", "skip_unmapped", "skip_no_boxes", "skip_no_dims"):
+    for k in ("labeled", "background", "skip_unmapped", "skip_no_boxes", "skip_no_dims", "skip_missing"):
         if stats[k]:
             print(f"  {k}: {stats[k]}")
     if unmapped:
