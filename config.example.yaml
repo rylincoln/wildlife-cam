@@ -51,6 +51,8 @@ storage:
   thumbnail_px: 320
 
 retention:
+  # Human-reviewed captures (reclassified or marked reviewed in /admin/captures)
+  # are exempt from min_confidence_keep, but still subject to max_age_days.
   max_age_days: 30 # prune.py deletes captures older than this
   min_confidence_keep: 0.0 # optionally also prune low-confidence captures
 
