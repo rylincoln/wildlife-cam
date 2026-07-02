@@ -322,6 +322,51 @@ subject to `max_age_days`, so export anything you want to keep permanently.
 
 ---
 
+## Remote access (Cloudflare Tunnel)
+
+Reach the gallery + live view from anywhere at one URL (e.g. `https://cam.rlblais.org`),
+protected by a **shared secret in the link** — no ports forwarded, home IP hidden,
+`/admin` unreachable remotely, and your LAN unchanged. Free Cloudflare plan.
+
+**How the gate works.** Requests arriving through the tunnel (from the local
+`cloudflared`, i.e. a loopback address) must carry the secret: as `?key=…` on the first
+visit, then a `wl_key` cookie. LAN requests (real private IPs) are never gated. `/admin`
+returns 404 over the tunnel. Live video is go2rtc's MSE player under `/go2rtc` (WebRTC
+can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the same cookie.
+
+### One-time setup
+
+1. `brew install cloudflared` (keep current: `brew upgrade cloudflared`).
+2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create → Cloudflared → name
+   it; copy the token; `sudo cloudflared service install <TOKEN>` (boot daemon).
+3. Add two **public hostnames** on that tunnel (order matters — the `/go2rtc` one first):
+   - `cam` . `rlblais.org`, **Path** `go2rtc` → HTTP `localhost:1984`
+   - `cam` . `rlblais.org`, (no path) → HTTP `localhost:8080`
+4. In `config.yaml` set `remote.base_url: "https://cam.rlblais.org"` and
+   `livestream.base_path: "/go2rtc"`; regenerate go2rtc config
+   (`wildlife-stream-config`) and restart the gallery + go2rtc.
+5. Run `wildlife-share-secret` → note the printed **share link** and **raw secret**.
+6. Add a Cloudflare **WAF custom rule**: *Block* when the path starts with `/go2rtc` and
+   the `wl_key` cookie ≠ the raw secret. (Free-plan fallback: a small Cloudflare Worker on
+   `cam.rlblais.org/go2rtc/*` that checks the `wl_key` cookie.)
+7. Set each camera's **sub-stream to H.264 Main/Baseline** so MSE live plays in every
+   browser incl. Safari/iOS.
+8. Keep **Total TLS OFF** for the zone so `cam.` stays out of Certificate Transparency logs.
+
+### Using / rotating
+
+- Share `https://cam.rlblais.org/?key=<secret>`; the recipient's browser stores the
+  cookie so the key only appears once.
+- **Rotate / revoke everyone:** re-run `wildlife-share-secret` and update the WAF rule
+  with the new secret. Old links stop working.
+
+> **Security note.** This is view-only "anyone with the link" access: a forwarded link
+> grants access until you rotate. `/admin` is never exposed remotely. See
+> `docs/superpowers/specs/2026-07-02-remote-access-cloudflare-tunnel-design.md` for the
+> full threat model and the go2rtc-exposure trade-off.
+
+---
+
 ## Running as a service (launchd)
 
 For 24/7 operation, install the worker and gallery as **LaunchDaemons** (not
