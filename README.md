@@ -385,6 +385,42 @@ For full details, read [`spec.md`](spec.md).
 
 ---
 
+## Acknowledgements
+
+This project stands on some excellent open-source work:
+
+- [**go2rtc**](https://github.com/AlexxIT/go2rtc) — the on-demand WebRTC/MSE
+  restreamer behind the optional Live view.
+- [**Ultralytics YOLO**](https://github.com/ultralytics/ultralytics) — the object
+  detector (stock COCO model and the fine-tuning toolchain).
+- [**SpeciesNet**](https://github.com/google/cameratrapai) — used to auto-label
+  training images with species predictions.
+- [**LILA BC**](https://lila.science/) camera-trap datasets (ENA24, Caltech
+  Camera Traps, Idaho, etc.) — the public data used to bootstrap a local-species
+  detector before you have your own captures. Please honor each dataset's
+  citation and attribution terms.
+- [**Reolink**](https://reolink.com/) cameras and the
+  [`reolink-aio`](https://github.com/starkillerOG/reolink_aio) library for the
+  native event path.
+
+---
+
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+This project's own source is **MIT** — see [`LICENSE`](LICENSE).
+
+> **Dependency licenses differ.** The MIT license covers only the code in this
+> repository. Notably, the stock YOLO model and the `ultralytics` package are
+> **AGPL-3.0** (not MIT), and the training toolchain also uses SpeciesNet. You
+> are responsible for complying with the licenses of the model weights and
+> dependencies you install and distribute — especially if you run this as a
+> network-accessible service or redistribute it.
+
+---
+
+## Status
+
+This is a personal project, shared in the hope it's useful. It's provided
+**as-is**, with no warranty and no commitment to support, maintenance, or
+reviewing issues/PRs (see the warranty disclaimer in [`LICENSE`](LICENSE)).
+Feel free to fork it and adapt it to your own cameras and local species.
