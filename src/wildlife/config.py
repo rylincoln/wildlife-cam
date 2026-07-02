@@ -35,6 +35,7 @@ __all__ = [
     "ResourceGuardConfig",
     "LivestreamConfig",
     "AdminConfig",
+    "RemoteConfig",
     "Config",
     "load_config",
 ]
@@ -175,6 +176,18 @@ class LivestreamConfig(BaseModel):
     # different defaults per tile.
     main_mode: str = "webrtc,mse"  # HEVC 4K -> MSE
     sub_mode: str = "webrtc"  # H264 High -> WebRTC (omit "mse" so it isn't chosen)
+    base_path: str = ""  # serve go2rtc under a sub-path (e.g. "/go2rtc") for tunnel exposure
+
+    @field_validator("base_path")
+    @classmethod
+    def _normalize_base_path(cls, value: str) -> str:
+        """Normalize a go2rtc sub-path: '' stays '', else leading slash, no trailing slash."""
+        value = value.strip()
+        if not value:
+            return ""
+        if not value.startswith("/"):
+            value = "/" + value
+        return value.rstrip("/")
 
 
 class AdminConfig(BaseModel):
@@ -192,6 +205,22 @@ class AdminConfig(BaseModel):
     password_hash: str | None = None
 
 
+class RemoteConfig(BaseModel):
+    """Optional Cloudflare-Tunnel remote access gated by a shared-secret link.
+
+    When ``enabled``, requests arriving via the local cloudflared connector (a
+    loopback ``remote_addr``) must carry the shared secret -- as ``?key=`` on the
+    first hit, then a cookie -- or receive a 404. LAN traffic is unaffected, and
+    ``/admin`` is refused over the tunnel regardless of the secret. Only a Werkzeug
+    *hash* of the secret is stored (set via ``wildlife-share-secret``).
+    """
+
+    enabled: bool = False
+    base_url: str = ""  # canonical public URL e.g. "https://cam.rlblais.org" (share links / logs)
+    share_secret_hash: str | None = None
+    block_admin: bool = True
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -206,6 +235,7 @@ class Config(BaseModel):
     resource_guard: ResourceGuardConfig
     livestream: LivestreamConfig = Field(default_factory=LivestreamConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    remote: RemoteConfig = Field(default_factory=RemoteConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":
