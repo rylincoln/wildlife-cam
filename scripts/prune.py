@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta
@@ -43,6 +42,7 @@ def _bootstrap_src_path() -> None:
 _bootstrap_src_path()
 
 from wildlife.config import load_config  # noqa: E402
+from wildlife.store import _prune_empty_dirs, _safe_unlink  # noqa: E402
 
 logger = logging.getLogger("prune")
 
@@ -80,56 +80,25 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
-def _safe_unlink(captures_dir: Path, rel: str | None) -> tuple[bool, int]:
-    """Delete ``captures_dir/rel`` if present and safely inside ``captures_dir``.
+def _has_reviewed_column(conn: sqlite3.Connection) -> bool:
+    """True if the captures table has the ``reviewed`` column (post-migration)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(captures)")}
+    return "reviewed" in cols
 
-    Returns ``(deleted, bytes_freed)``. Missing files count as not-deleted with
-    zero bytes (keeps the operation idempotent). Paths that resolve outside the
-    captures tree are refused as a safety check.
+
+def _build_where(cutoff_iso: str, min_conf: float, has_reviewed: bool) -> tuple[str, list]:
+    """Build the prune match predicate.
+
+    Age always applies. When ``min_conf > 0`` the confidence rule applies too,
+    but human-reviewed rows are exempt from it (a curator confirmed the capture,
+    so a low *model* confidence must not auto-delete it). Age retention still
+    applies to reviewed rows.
     """
-    if not rel:
-        return (False, 0)
-
-    target = captures_dir / rel
-    root = captures_dir.resolve()
-    try:
-        resolved = target.resolve()
-    except OSError:
-        return (False, 0)
-
-    if root != resolved and root not in resolved.parents:
-        logger.warning("Refusing to delete path outside captures_dir: %s", target)
-        return (False, 0)
-
-    if not resolved.exists():
-        return (False, 0)
-
-    try:
-        size = resolved.stat().st_size
-        resolved.unlink()
-        return (True, size)
-    except OSError as exc:
-        logger.warning("Could not delete %s: %s", resolved, exc)
-        return (False, 0)
-
-
-def _prune_empty_dirs(root: Path) -> int:
-    """Remove now-empty subdirectories under ``root`` (bottom-up). Returns count."""
-    if not root.is_dir():
-        return 0
-    removed = 0
-    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
-        directory = Path(dirpath)
-        if directory == root:
-            continue
-        try:
-            if not any(directory.iterdir()):
-                directory.rmdir()
-                removed += 1
-        except OSError:
-            # Non-empty or vanished concurrently; leave it be.
-            pass
-    return removed
+    if min_conf <= 0.0:
+        return ("capture_ts < ?", [cutoff_iso])
+    if has_reviewed:
+        return ("(capture_ts < ? OR (confidence < ? AND reviewed = 0))", [cutoff_iso, float(min_conf)])
+    return ("(capture_ts < ? OR confidence < ?)", [cutoff_iso, float(min_conf)])
 
 
 def main() -> int:
@@ -174,19 +143,16 @@ def main() -> int:
         print(f"No database at {db_path}; nothing to prune.")
         return 0
 
-    # Build the match predicate (shared by SELECT and DELETE).
-    where = "capture_ts < ?"
-    params: list[object] = [cutoff_iso]
-    if min_conf > 0.0:
-        where = "(capture_ts < ? OR confidence < ?)"
-        params = [cutoff_iso, float(min_conf)]
-
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         if not _table_exists(conn):
             print("Database has no 'captures' table; nothing to prune.")
             return 0
+
+        # Build the match predicate (shared by SELECT and DELETE); reviewed rows
+        # are exempt from the confidence rule when the column is present.
+        where, params = _build_where(cutoff_iso, min_conf, _has_reviewed_column(conn))
 
         rows = conn.execute(
             f"SELECT id, image_path, thumb_path, capture_ts, confidence "

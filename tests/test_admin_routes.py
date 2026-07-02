@@ -25,6 +25,36 @@ def _auth(pw: str = _PASSWORD) -> dict:
     return {"Authorization": f"Basic {token}"}
 
 
+def _seed_capture(cfgp: Path, label: str = "deer") -> int:
+    """Insert one capture into the configured DB; return its id."""
+    from datetime import datetime
+    import numpy as np
+    from wildlife.config import load_config
+    from wildlife.models import Detection
+    from wildlife.store import Store
+
+    cfg = load_config(cfgp)
+    store = Store(db_path=cfg.storage.db_path, captures_dir=cfg.storage.captures_dir)
+    store.init_schema()
+    try:
+        return store.save_capture(
+            camera_id="north_field", event_ts=datetime(2020, 1, 1),
+            capture_ts=datetime(2020, 1, 1),
+            frame=np.zeros((120, 160, 3), dtype=np.uint8),
+            det=Detection(label=label, confidence=0.8, box_xyxy=(1, 1, 5, 5), box_area_frac=0.1),
+        )
+    finally:
+        store.close()
+
+
+def _open_store(cfgp):
+    from wildlife.config import load_config
+    from wildlife.store import Store
+    cfg = load_config(cfgp)
+    s = Store(db_path=cfg.storage.db_path, captures_dir=cfg.storage.captures_dir)
+    return s
+
+
 @pytest.fixture()
 def ctx(tmp_path: Path):
     cfgp = tmp_path / "config.yaml"
@@ -231,3 +261,104 @@ def test_gallery_live_reloads_config_without_restart(ctx) -> None:
     cio.update_section(cfgp, "detection", {"confidence_threshold": 0.9})
     body = client.get("/admin/detection", headers=_auth()).data
     assert b"0.9" in body
+
+
+def _origin(host: str = "localhost") -> dict:
+    return {"Origin": f"http://{host}"}
+
+
+def test_captures_auth_and_render(ctx) -> None:
+    client, cfgp = ctx
+    _seed_capture(cfgp)
+    # Auth required.
+    assert client.get("/admin/captures").status_code == 401
+    assert client.post("/admin/captures/bulk", json={}).status_code == 401
+    # Renders when authed.
+    r = client.get("/admin/captures", headers=_auth())
+    assert r.status_code == 200
+    assert b"deer" in r.data
+
+
+def test_capture_delete_route(ctx) -> None:
+    client, cfgp = ctx
+    cid = _seed_capture(cfgp)
+    r = client.post(f"/admin/captures/{cid}/delete", headers=_auth())
+    assert r.status_code == 302
+    # The row is actually gone (302 alone would pass even on a no-op).
+    s = _open_store(cfgp)
+    assert s.get(cid) is None
+    s.close()
+    # GET on a POST-only route is rejected.
+    assert client.get(f"/admin/captures/{cid}/delete", headers=_auth()).status_code == 405
+
+
+def test_capture_reclassify_route(ctx) -> None:
+    client, cfgp = ctx
+    cid = _seed_capture(cfgp)  # label "deer"
+    _seed_capture(cfgp, label="elk")  # so "elk" is a real target in distinct_labels
+    # Invalid label -> flash err, still 302 (PRG) -- and nothing changes.
+    r = client.post(f"/admin/captures/{cid}/reclassify", headers=_auth(),
+                    data={"new_label": "not_a_class"})
+    assert r.status_code == 302
+    s = _open_store(cfgp)
+    assert s.get(cid)["label"] == "deer"  # rejected -> unchanged
+    s.close()
+    # Valid relabel to an existing label -> row updated + marked reviewed.
+    r = client.post(f"/admin/captures/{cid}/reclassify", headers=_auth(),
+                    data={"new_label": "elk"})
+    assert r.status_code == 302
+    s = _open_store(cfgp)
+    row = s.get(cid)
+    assert row["label"] == "elk"
+    assert row["reviewed"] == 1
+    s.close()
+    # GET on a POST-only route is rejected.
+    assert client.get(f"/admin/captures/{cid}/reclassify", headers=_auth()).status_code == 405
+
+
+def test_captures_page_has_bulk_ui(ctx) -> None:
+    client, cfgp = ctx
+    _seed_capture(cfgp)
+    r = client.get("/admin/captures", headers=_auth())
+    html = r.data
+    assert b'id="bulk-status"' in html
+    assert b'class="bulk-toolbar"' in html
+    assert b'class="select-box"' in html   # per-card selection checkbox
+    assert b'id="lightbox"' in html
+
+
+def test_captures_bulk_route(ctx) -> None:
+    client, cfgp = ctx
+    cid = _seed_capture(cfgp)  # reclassified below, then deleted last
+    hdr = {**_auth(), **_origin()}
+    # Invalid reclassify label is rejected (allow-list enforced).
+    assert client.post("/admin/captures/bulk", headers=hdr,
+                       json={"action": "reclassify", "ids": [cid],
+                             "label": "not_a_class"}).status_code == 400
+    # Valid bulk reclassify updates the row ('deer' is in distinct_labels).
+    r = client.post("/admin/captures/bulk", headers=hdr,
+                    json={"action": "reclassify", "ids": [cid], "label": "deer"})
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "action": "reclassify", "affected": 1}
+    s = _open_store(cfgp)
+    assert s.get(cid)["label"] == "deer"
+    s.close()
+    # Bad action.
+    assert client.post("/admin/captures/bulk", headers=hdr,
+                       json={"action": "nope", "ids": [1]}).status_code == 400
+    # Non-JSON body.
+    assert client.post("/admin/captures/bulk", headers=hdr, data="x").status_code == 400
+    # Non-int id.
+    assert client.post("/admin/captures/bulk", headers=hdr,
+                       json={"action": "delete", "ids": ["1; DROP"]}).status_code == 400
+    # GET on a POST-only route is rejected.
+    assert client.get("/admin/captures/bulk", headers=_auth()).status_code == 405
+    # Cross-origin POST is blocked by the guard.
+    assert client.post("/admin/captures/bulk", headers={**_auth(), "Origin": "http://evil.example"},
+                       json={"action": "delete", "ids": [1]}).status_code == 403
+    # Happy path (delete last so we don't remove a row still under test).
+    r = client.post("/admin/captures/bulk", headers=hdr,
+                    json={"action": "delete", "ids": [cid]})
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "action": "delete", "affected": 1}
+    s = _open_store(cfgp)
+    assert s.get(cid) is None
+    s.close()
