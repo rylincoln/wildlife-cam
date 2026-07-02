@@ -329,7 +329,10 @@ CREATE TABLE IF NOT EXISTS captures (
     box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL,
     image_path  TEXT    NOT NULL,   -- relative to captures_dir
     thumb_path  TEXT    NOT NULL,
-    width INTEGER, height INTEGER
+    width INTEGER, height INTEGER,
+    original_label TEXT,               -- model's label before a human reclassify
+    reviewed       INTEGER NOT NULL DEFAULT 0,
+    reviewed_at    TEXT                -- ISO8601 of the last human action
 );
 CREATE INDEX IF NOT EXISTS idx_capture_ts ON captures(capture_ts);
 CREATE INDEX IF NOT EXISTS idx_camera     ON captures(camera_id);
@@ -341,6 +344,11 @@ CREATE INDEX IF NOT EXISTS idx_label      ON captures(label);
 - Write JPEG at `jpeg_quality`; generate a `thumbnail_px`-wide thumbnail at save time
   (Pillow). Thumbnails keep the gallery fast.
 - Enable SQLite **WAL mode** so the gallery can read while the worker writes.
+- `original_label`/`reviewed`/`reviewed_at` were added after v1, for the admin
+  capture-management UI (see 6.7 and the "Managing captures" section of
+  `README.md`). `init_schema()` applies them via an idempotent migration
+  (`ALTER TABLE ... ADD COLUMN`, guarded so it's a no-op on an already-migrated
+  or brand-new DB), so upgrading in place never loses existing rows.
 
 ### 6.6 Worker (`worker.py`)
 
@@ -373,6 +381,19 @@ Minimal Flask app, read-only against SQLite:
   No auth in v1 (LAN-only); README notes that exposing beyond LAN needs auth + TLS.
 - Keep it light: server-rendered grid + a little vanilla JS. No heavy frontend framework.
 
+**Admin capture management** (post-v1; password-gated, part of the optional
+`/admin` blueprint — see `README.md`'s Admin section):
+
+- `GET /admin/captures` — the same filters as `/` plus a `reviewed` state, over a
+  selectable thumbnail grid.
+- `POST /admin/captures/<id>/delete` — permanently removes the row and both
+  JPEGs (full + thumbnail), reusing the same file-deletion helpers as
+  `scripts/prune.py`.
+- `POST /admin/captures/<id>/reclassify` — relabels a capture; the first edit
+  records the model's original label in `original_label` and sets `reviewed`.
+- `POST /admin/captures/bulk` — delete, reclassify, or mark-reviewed over a set
+  of selected ids in one request.
+
 ---
 
 ## 7. Build Order (incremental, each step testable)
@@ -393,6 +414,10 @@ Minimal Flask app, read-only against SQLite:
 9. **`gallery/`** — Flask app over the populated DB.
 10. **launchd plists** — install both LaunchDaemons, load, reboot, confirm auto-start.
 11. **`scripts/prune.py` + a launchd-scheduled (StartCalendarInterval) run** — retention.
+12. **Admin capture management** (post-v1, builds on the optional admin editor) —
+    `store.py` gains `delete`/`delete_many`/`update_label`/`update_label_many`/
+    `mark_reviewed_many`; the `/admin/captures` routes (6.7) wrap them; retention
+    (step 11) is updated to spare `reviewed` rows from `min_confidence_keep`.
 
 ---
 

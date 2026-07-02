@@ -15,11 +15,12 @@ Pillow. Image paths persisted in the database are stored *relative* to
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 from PIL import Image
@@ -40,7 +41,10 @@ CREATE TABLE IF NOT EXISTS captures (
     box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL,
     image_path  TEXT    NOT NULL,   -- relative to captures_dir
     thumb_path  TEXT    NOT NULL,
-    width INTEGER, height INTEGER
+    width INTEGER, height INTEGER,
+    original_label TEXT,               -- model's label before a human reclassify
+    reviewed       INTEGER NOT NULL DEFAULT 0,
+    reviewed_at    TEXT                -- ISO8601 of the last human action
 );
 CREATE INDEX IF NOT EXISTS idx_capture_ts ON captures(capture_ts);
 CREATE INDEX IF NOT EXISTS idx_camera     ON captures(camera_id);
@@ -63,6 +67,16 @@ _COLUMNS: tuple[str, ...] = (
     "thumb_path",
     "width",
     "height",
+    "original_label",
+    "reviewed",
+    "reviewed_at",
+)
+
+# Columns added after the original schema; applied idempotently by _migrate().
+_COLUMN_ADDITIONS: tuple[tuple[str, str], ...] = (
+    ("original_label", "TEXT"),
+    ("reviewed", "INTEGER NOT NULL DEFAULT 0"),
+    ("reviewed_at", "TEXT"),
 )
 
 
@@ -73,9 +87,135 @@ def _iso(ts: datetime | str) -> str:
     return str(ts)
 
 
+def _now_iso() -> str:
+    """Timestamp for human edits, matching the ISO8601 TEXT convention."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def _sanitize(part: str) -> str:
     """Make a string safe to embed in a filename path segment."""
     return "".join(c if c.isalnum() or c in ("-", ".") else "_" for c in part)
+
+
+def _safe_unlink(captures_dir: Path, rel: str | None) -> tuple[bool, int]:
+    """Delete ``captures_dir/rel`` if present and safely inside ``captures_dir``.
+
+    Returns ``(deleted, bytes_freed)``. Missing files count as not-deleted with
+    zero bytes (keeps the operation idempotent). Paths that resolve outside the
+    captures tree are refused as a safety check.
+    """
+    if not rel:
+        return (False, 0)
+
+    target = captures_dir / rel
+    root = captures_dir.resolve()
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return (False, 0)
+
+    if root != resolved and root not in resolved.parents:
+        logger.warning("Refusing to delete path outside captures_dir: %s", target)
+        return (False, 0)
+
+    if not resolved.exists():
+        return (False, 0)
+
+    try:
+        size = resolved.stat().st_size
+        resolved.unlink()
+        return (True, size)
+    except OSError as exc:
+        logger.warning("Could not delete %s: %s", resolved, exc)
+        return (False, 0)
+
+
+def _prune_empty_dirs(root: Path) -> int:
+    """Remove now-empty subdirectories under ``root`` (bottom-up). Returns count."""
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+        directory = Path(dirpath)
+        if directory == root:
+            continue
+        try:
+            if not any(directory.iterdir()):
+                directory.rmdir()
+                removed += 1
+        except OSError:
+            # Non-empty or vanished concurrently; leave it be.
+            pass
+    return removed
+
+
+def _chunked(seq: list, size: int) -> Iterable[list]:
+    """Yield ``seq`` in lists of at most ``size`` (for SQLite IN-clause limits)."""
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def _sweep_empty_capture_dirs(captures_dir: Path, rels: Iterable[str]) -> int:
+    """Remove now-empty ``YYYY/MM/DD`` dirs for the given relative file paths.
+
+    Scoped to the deleted captures' own dated directories (not the whole tree),
+    and skips the current day's directory because the worker may be writing
+    there. Walks up MM/YYYY so an emptied day frees its parents too. Returns the
+    number of directories removed. Never raises.
+    """
+    now = datetime.now()
+    today = (captures_dir / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}").resolve()
+    root = captures_dir.resolve()
+    day_dirs = {(captures_dir / rel).parent for rel in rels if rel}
+    removed = 0
+    for day in day_dirs:
+        for directory in (day, day.parent, day.parent.parent):
+            try:
+                resolved = directory.resolve()
+            except OSError:
+                continue
+            if resolved == today or resolved == root or root not in resolved.parents:
+                continue
+            try:
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+                    removed += 1
+            except OSError:
+                pass
+    return removed
+
+
+def _build_filters(
+    *,
+    camera_id: str | None,
+    label: str | None,
+    start: datetime | str | None,
+    end: datetime | str | None,
+    min_confidence: float | None,
+    reviewed: bool | None,
+) -> tuple[list[str], list[Any]]:
+    """Build the shared AND-combined WHERE clauses + params for query/count."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if camera_id is not None:
+        clauses.append("camera_id = ?")
+        params.append(camera_id)
+    if label is not None:
+        clauses.append("label = ?")
+        params.append(label)
+    if start is not None:
+        clauses.append("capture_ts >= ?")
+        params.append(_iso(start))
+    if end is not None:
+        clauses.append("capture_ts <= ?")
+        params.append(_iso(end))
+    if min_confidence is not None:
+        clauses.append("confidence >= ?")
+        params.append(float(min_confidence))
+    if reviewed is not None:
+        clauses.append("reviewed = ?")
+        params.append(1 if reviewed else 0)
+    return clauses, params
 
 
 class Store:
@@ -114,18 +254,40 @@ class Store:
         # WAL mode (set in init_schema) keeps those readers from blocking.
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # Serialize writes from this instance; reads remain concurrent under WAL.
+        # Per-connection PRAGMAs. busy_timeout MUST be set on every connection
+        # (not just the boot/worker one) so a gallery/admin write waits for the
+        # worker's WAL writer instead of failing immediately with "database is
+        # locked". journal_mode=WAL is persistent (file header) so it stays in
+        # init_schema; busy_timeout/synchronous are per-connection and do not.
+        self._conn.execute("PRAGMA busy_timeout=5000;")
+        self._conn.execute("PRAGMA synchronous=NORMAL;")
+        # Serialize writes from THIS instance; cross-connection writes are
+        # arbitrated by SQLite WAL + busy_timeout, not by this lock.
         self._write_lock = threading.Lock()
 
     # ----------------------------------------------------------------- schema
     def init_schema(self) -> None:
-        """Create the captures table + indexes and enable WAL mode (idempotent)."""
+        """Create the captures table + indexes, enable WAL, and migrate (idempotent)."""
         with self._write_lock:
             self._conn.execute("PRAGMA journal_mode=WAL;")
-            self._conn.execute("PRAGMA synchronous=NORMAL;")
             self._conn.executescript(_SCHEMA_SQL)
+            self._migrate()
             self._conn.commit()
         logger.debug("Initialised capture schema at %s", self.db_path)
+
+    def _migrate(self) -> None:
+        """Add any missing post-original columns. Safe across re-runs and races."""
+        existing = {r["name"] for r in self._conn.execute("PRAGMA table_info(captures)")}
+        for name, decl in _COLUMN_ADDITIONS:
+            if name in existing:
+                continue
+            try:
+                self._conn.execute(f"ALTER TABLE captures ADD COLUMN {name} {decl}")
+            except sqlite3.OperationalError as exc:
+                # Another process (worker vs gallery boot) added it between the
+                # check and the ALTER — a schema error busy_timeout can't absorb.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     # ------------------------------------------------------------- write path
     def save_capture(
@@ -267,44 +429,48 @@ class Store:
         start: datetime | str | None = None,
         end: datetime | str | None = None,
         min_confidence: float | None = None,
+        reviewed: bool | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return matching rows as dicts, newest first.
 
         All filters are optional and AND-combined. ``start``/``end`` bound
-        ``capture_ts`` inclusively (ISO8601 strings sort chronologically, so a
-        lexical comparison is correct). Results are ordered by ``capture_ts``
-        descending (ties broken by ``id`` descending) and paginated via
-        ``limit``/``offset``.
+        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag.
+        Results are ordered by ``capture_ts`` desc (ties by ``id`` desc) and
+        paginated via ``limit``/``offset``.
         """
-        clauses: list[str] = []
-        params: list[Any] = []
-
-        if camera_id is not None:
-            clauses.append("camera_id = ?")
-            params.append(camera_id)
-        if label is not None:
-            clauses.append("label = ?")
-            params.append(label)
-        if start is not None:
-            clauses.append("capture_ts >= ?")
-            params.append(_iso(start))
-        if end is not None:
-            clauses.append("capture_ts <= ?")
-            params.append(_iso(end))
-        if min_confidence is not None:
-            clauses.append("confidence >= ?")
-            params.append(float(min_confidence))
-
+        clauses, params = _build_filters(
+            camera_id=camera_id, label=label, start=start, end=end,
+            min_confidence=min_confidence, reviewed=reviewed,
+        )
         sql = "SELECT * FROM captures"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY capture_ts DESC, id DESC LIMIT ? OFFSET ?"
         params.extend((int(limit), int(offset)))
-
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    def count(
+        self,
+        *,
+        camera_id: str | None = None,
+        label: str | None = None,
+        start: datetime | str | None = None,
+        end: datetime | str | None = None,
+        min_confidence: float | None = None,
+        reviewed: bool | None = None,
+    ) -> int:
+        """Return the number of rows matching the same filters as :meth:`query`."""
+        clauses, params = _build_filters(
+            camera_id=camera_id, label=label, start=start, end=end,
+            min_confidence=min_confidence, reviewed=reviewed,
+        )
+        sql = "SELECT COUNT(*) FROM captures"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        return int(self._conn.execute(sql, params).fetchone()[0])
 
     def distinct_cameras(self) -> list[str]:
         """Return the sorted set of camera ids present in the index."""
@@ -319,6 +485,126 @@ class Store:
             "SELECT DISTINCT label FROM captures ORDER BY label"
         ).fetchall()
         return [r["label"] for r in rows]
+
+    # ------------------------------------------------------------- delete path
+    def delete(self, capture_id: int) -> bool:
+        """Delete one capture: unlink both files, then remove the row.
+
+        Files are removed first (idempotently, path-guarded); the DB delete then
+        proceeds regardless of unlink outcome. Returns True if a row was removed.
+        """
+        row = self.get(capture_id)
+        if row is None:
+            return False
+        rels = [row.get("image_path"), row.get("thumb_path")]
+        for rel in rels:
+            _safe_unlink(self.captures_dir, rel)
+        with self._write_lock:
+            cur = self._conn.execute("DELETE FROM captures WHERE id = ?", (capture_id,))
+            self._conn.commit()
+        _sweep_empty_capture_dirs(self.captures_dir, [r for r in rels if r])
+        return cur.rowcount == 1
+
+    def delete_many(self, ids: Iterable[int]) -> int:
+        """Delete many captures by id. Returns the number of rows actually removed."""
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        total = 0
+        swept: list[str] = []
+        for chunk in _chunked(id_list, 900):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self._conn.execute(
+                f"SELECT image_path, thumb_path FROM captures WHERE id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for r in rows:
+                for key in ("image_path", "thumb_path"):
+                    _safe_unlink(self.captures_dir, r[key])
+                    if r[key]:
+                        swept.append(r[key])
+            with self._write_lock:
+                cur = self._conn.execute(
+                    f"DELETE FROM captures WHERE id IN ({placeholders})", chunk
+                )
+                self._conn.commit()
+                total += cur.rowcount
+        _sweep_empty_capture_dirs(self.captures_dir, swept)
+        return total
+
+    # ------------------------------------------------------------ update path
+    def update_label(self, capture_id: int, new_label: str) -> dict[str, Any] | None:
+        """Reclassify one capture. Records ``original_label`` on first edit.
+
+        Returns the updated row dict, or None if ``capture_id`` does not exist.
+        Raises ValueError on a blank label (the DB column is NOT NULL and must
+        never receive an empty string).
+        """
+        label = (new_label or "").strip()
+        if not label:
+            raise ValueError("new_label must be a non-empty string")
+        with self._write_lock:
+            cur = self._conn.execute(
+                """
+                UPDATE captures
+                   SET original_label = COALESCE(original_label, label),
+                       label = ?, reviewed = 1, reviewed_at = ?
+                 WHERE id = ?
+                """,
+                (label, _now_iso(), capture_id),
+            )
+            self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get(capture_id)
+
+    def update_label_many(self, ids: Iterable[int], new_label: str) -> int:
+        """Reclassify many captures. Returns the number of rows touched."""
+        label = (new_label or "").strip()
+        if not label:
+            raise ValueError("new_label must be a non-empty string")
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        now = _now_iso()
+        total = 0
+        with self._write_lock:
+            for chunk in _chunked(id_list, 900):
+                placeholders = ",".join("?" for _ in chunk)
+                cur = self._conn.execute(
+                    f"""
+                    UPDATE captures
+                       SET original_label = COALESCE(original_label, label),
+                           label = ?, reviewed = 1, reviewed_at = ?
+                     WHERE id IN ({placeholders})
+                    """,
+                    [label, now, *chunk],
+                )
+                total += cur.rowcount
+            self._conn.commit()
+        return total
+
+    def mark_reviewed_many(self, ids: Iterable[int]) -> int:
+        """Mark many captures reviewed without changing their label.
+
+        Returns the number newly marked (rows already reviewed are not counted).
+        """
+        id_list = [int(i) for i in ids]
+        if not id_list:
+            return 0
+        now = _now_iso()
+        total = 0
+        with self._write_lock:
+            for chunk in _chunked(id_list, 900):
+                placeholders = ",".join("?" for _ in chunk)
+                cur = self._conn.execute(
+                    f"UPDATE captures SET reviewed = 1, reviewed_at = ? "
+                    f"WHERE id IN ({placeholders}) AND reviewed = 0",
+                    [now, *chunk],
+                )
+                total += cur.rowcount
+            self._conn.commit()
+        return total
 
     # ------------------------------------------------------------- lifecycle
     def close(self) -> None:

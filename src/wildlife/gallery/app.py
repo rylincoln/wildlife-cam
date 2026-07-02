@@ -389,7 +389,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     if config_path is not None:
         from wildlife.admin.routes import create_admin_blueprint
 
-        app.register_blueprint(create_admin_blueprint(config_path, get_config))
+        app.register_blueprint(create_admin_blueprint(config_path, get_config, get_store))
 
     return app
 

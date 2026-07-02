@@ -297,6 +297,29 @@ open, read-only gallery), but the password crosses the LAN via HTTP Basic Auth â
 keep it LAN-only, or front it with a reverse proxy providing TLS. With no
 password set, `/admin` fails closed (403).
 
+### Managing captures
+
+Browse to **`/admin/captures`** (the "Captures" tab) to review and clean up
+detections. It reuses the gallery filters (camera, class, date, plus a
+**Review** state) over a selectable thumbnail grid:
+
+- **Reclassify** a capture to another species from the dropdown. The first edit
+  records the model's original prediction (`original_label`) and marks the row
+  **reviewed**, so human-corrected captures are usable later as clean training
+  data. (Reclassifying is DB-only â€” the on-disk filename keeps its original
+  label, which is harmless because files are resolved by their stored path.)
+- **Delete** a capture. This is **permanent**: it removes the SQLite row *and*
+  both JPEG files (full + thumbnail), mirroring `scripts/prune.py`. There is no
+  undo. Deleting is the disposal path for false positives.
+- **Bulk**: tick the checkboxes to delete, reclassify, or mark-reviewed many at
+  once. Selection applies to the current page.
+- A **"Mark reviewed"** action and the **Unreviewed** filter let you work
+  through a backlog without re-seeing handled captures.
+
+Reviewed captures are exempt from retention's `min_confidence_keep` rule (a
+human-confirmed low-confidence capture is not auto-pruned); they are still
+subject to `max_age_days`, so export anything you want to keep permanently.
+
 ---
 
 ## Running as a service (launchd)

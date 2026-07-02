@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from flask import (
     Blueprint,
     Response,
+    current_app,
     flash,
     jsonify,
     redirect,
@@ -35,6 +36,7 @@ from werkzeug.security import generate_password_hash
 from wildlife.admin import config_io
 from wildlife.admin.auth import check_admin_auth
 from wildlife.admin.config_io import ConfigError
+from wildlife.gallery.app import _parse_filters, _parse_page
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ _TEST_TIMEOUT_S = 8  # per-operation, handed to the probe
 _TEST_SUBPROC_TIMEOUT = 60  # hard cap on the whole "Test" (both streams + reolink)
 _SAVE_CHECK_SUBPROC_TIMEOUT = 25  # quick single-stream check on save
 _MIN_PASSWORD_LEN = 8
+_BULK_MAX_IDS = 1000
 
 
 def _run_probe(params: dict, timeout: int) -> dict:
@@ -72,8 +75,17 @@ def _run_probe(params: dict, timeout: int) -> dict:
     return {"error": (proc.stderr or "camera test produced no result").strip()[:400]}
 
 
-def create_admin_blueprint(config_path: str | Path, get_config: Callable[[], object]) -> Blueprint:
-    """Build the ``/admin`` blueprint bound to ``config_path`` and ``get_config``."""
+def create_admin_blueprint(
+    config_path: str | Path,
+    get_config: Callable[[], object],
+    get_store: Callable[[], object],
+) -> Blueprint:
+    """Build the ``/admin`` blueprint.
+
+    ``get_store`` returns the gallery's per-request :class:`~wildlife.store.Store`
+    so capture-management routes read/write the same DB. File deletion is owned by
+    the Store (it holds ``captures_dir``), so the blueprint needs no path itself.
+    """
     config_path = str(config_path)
     bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -340,6 +352,104 @@ def create_admin_blueprint(config_path: str | Path, get_config: Callable[[], obj
         flash("Admin password updated. You may be prompted to re-authenticate.", "ok")
         return redirect(url_for("admin.dashboard"))
 
+    # ------------------------------------------------------------------ #
+    # Captures (browse + manage)
+    # ------------------------------------------------------------------ #
+    def _captures_redirect() -> str:
+        """Back to the captures list, preserving filters via the same-origin referrer."""
+        ref = request.referrer
+        if ref and urlsplit(ref).netloc == request.host:
+            return ref
+        return url_for("admin.captures_index")
+
+    @bp.route("/captures")
+    def captures_index():
+        store = get_store()
+        filters = _parse_filters(request.args)
+        reviewed = _parse_reviewed(request.args.get("reviewed"))
+        page = _parse_page(request.args.get("page"))
+        page_size = current_app.config["PAGE_SIZE"]
+        offset = (page - 1) * page_size
+        rows = store.query(
+            camera_id=filters["camera"], label=filters["label"],
+            start=filters["start"], end=filters["end"],
+            min_confidence=filters["min_confidence"], reviewed=reviewed,
+            limit=page_size + 1, offset=offset,
+        )
+        has_more = len(rows) > page_size
+        rows = rows[:page_size]
+        total = store.count(
+            camera_id=filters["camera"], label=filters["label"],
+            start=filters["start"], end=filters["end"],
+            min_confidence=filters["min_confidence"], reviewed=reviewed,
+        )
+        # Args to carry across Prev/Next links (everything except the page number).
+        query_args = {k: v for k, v in request.args.items() if k != "page"}
+        return render_template(
+            "admin/captures.html",
+            captures=[_serialize_capture(r) for r in rows],
+            cameras=store.distinct_cameras(),
+            labels=store.distinct_labels(),
+            reclassify_labels=_reclassify_labels(get_config(), store),
+            filters=filters,
+            reviewed=request.args.get("reviewed") or "",
+            query_args=query_args,
+            page=page, page_size=page_size, has_more=has_more, total=total,
+        )
+
+    @bp.route("/captures/<int:capture_id>/delete", methods=["POST"])
+    def capture_delete(capture_id: int):
+        if get_store().delete(capture_id):
+            flash(f"Capture #{capture_id} deleted.", "ok")
+        else:
+            flash(f"Capture #{capture_id} not found.", "err")
+        return redirect(_captures_redirect())
+
+    @bp.route("/captures/<int:capture_id>/reclassify", methods=["POST"])
+    def capture_reclassify(capture_id: int):
+        store = get_store()
+        new_label = (request.form.get("new_label") or "").strip()
+        row = store.get(capture_id)
+        if row is None:
+            flash(f"Capture #{capture_id} not found.", "err")
+            return redirect(_captures_redirect())
+        allowed = _reclassify_labels(get_config(), store, current=row.get("label"))
+        if new_label not in allowed:
+            flash(f"{new_label!r} is not a valid label.", "err")
+            return redirect(_captures_redirect())
+        store.update_label(capture_id, new_label)
+        flash(f"Capture #{capture_id} reclassified to {new_label!r}.", "ok")
+        return redirect(_captures_redirect())
+
+    @bp.route("/captures/bulk", methods=["POST"])
+    def captures_bulk():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"ok": False, "error": "JSON body required"}), 400
+        action = data.get("action")
+        if action not in ("delete", "reclassify", "mark_reviewed"):
+            return jsonify({"ok": False, "error": "unknown action"}), 400
+        raw_ids = data.get("ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({"ok": False, "error": "ids must be a non-empty list"}), 400
+        try:
+            ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "ids must be integers"}), 400
+        if len(ids) > _BULK_MAX_IDS:
+            return jsonify({"ok": False, "error": f"too many ids (max {_BULK_MAX_IDS})"}), 400
+        store = get_store()
+        if action == "delete":
+            affected = store.delete_many(ids)
+        elif action == "mark_reviewed":
+            affected = store.mark_reviewed_many(ids)
+        else:  # reclassify
+            label = (data.get("label") or "").strip()
+            if label not in _reclassify_labels(get_config(), store):
+                return jsonify({"ok": False, "error": "invalid label"}), 400
+            affected = store.update_label_many(ids, label)
+        return jsonify({"ok": True, "action": action, "affected": affected})
+
     return bp
 
 
@@ -396,4 +506,38 @@ def _detection_view_from_form(form) -> dict:
         "cooldown_s": form.get("cooldown_s", ""),
         "detect_every_nth_event": form.get("detect_every_nth_event", ""),
         "max_burst_per_minute": form.get("max_burst_per_minute", ""),
+    }
+
+
+def _parse_reviewed(value: str | None) -> bool | None:
+    """Map the ``reviewed`` filter param to a tri-state (all / reviewed / unreviewed)."""
+    if value == "reviewed":
+        return True
+    if value == "unreviewed":
+        return False
+    return None
+
+
+def _reclassify_labels(cfg, store, *, current: str | None = None) -> list[str]:
+    """The allowed reclassify targets: configured classes ∪ existing labels ∪ current."""
+    labels = set(getattr(cfg.detection, "animal_classes", []) or [])
+    labels.update(store.distinct_labels())
+    if current:
+        labels.add(current)
+    return sorted(labels)
+
+
+def _serialize_capture(row: dict) -> dict:
+    """Shape a capture row for the admin grid (reuses the gallery image routes)."""
+    cid = row["id"]
+    return {
+        "id": cid,
+        "camera_id": row.get("camera_id"),
+        "label": row.get("label"),
+        "confidence": row.get("confidence"),
+        "capture_ts": row.get("capture_ts"),
+        "reviewed": bool(row.get("reviewed")),
+        "original_label": row.get("original_label"),
+        "thumb_url": url_for("thumb", capture_id=cid),
+        "image_url": url_for("image", capture_id=cid),
     }

@@ -646,3 +646,21 @@ body.admin { padding-bottom: 60px; }
 .test-result p { margin: 4px 0; }
 .test-result p.ok  { color: var(--good); }
 .test-result p.bad { color: #ff8781; }
+
+/* --- Admin captures management --- */
+.admin-main-wide { max-width: 1400px; }
+.card .card-reviewed { position: absolute; top: 8px; right: 8px; z-index: 2; }
+.card-actions { position: absolute; inset: auto 0 0 0; display: flex; gap: 6px;
+  padding: 6px; background: rgba(0,0,0,0.35); pointer-events: auto; }
+.card-actions form { display: flex; gap: 4px; margin: 0; }
+.card-actions select { max-width: 130px; }
+
+.bulk-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap;
+  align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 12px;
+  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.bulk-toolbar .select-note { margin-left: auto; }
+.card .select-box { position: absolute; top: 8px; left: 8px; z-index: 3; width: 20px; height: 20px;
+  pointer-events: auto; cursor: pointer; }
+.card.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+#bulk-status { margin-bottom: 12px; }
+.pager { display: flex; align-items: center; gap: 12px; margin: 18px 0; }

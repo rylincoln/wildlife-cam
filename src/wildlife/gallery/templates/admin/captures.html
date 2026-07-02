@@ -1,0 +1,253 @@
+{% extends "admin/base.html" %}
+{% block title %}Captures{% endblock %}
+{% block main_class %}admin-main admin-main-wide{% endblock %}
+
+{% block content %}
+<form class="filters" method="get" action="{{ url_for('admin.captures_index') }}">
+  <label class="field"><span>Camera</span>
+    <select name="camera">
+      <option value="">All cameras</option>
+      {% for cam in cameras %}
+      <option value="{{ cam }}" {% if filters.camera == cam %}selected{% endif %}>{{ cam }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Class</span>
+    <select name="label">
+      <option value="">All classes</option>
+      {% for lbl in labels %}
+      <option value="{{ lbl }}" {% if filters.label == lbl %}selected{% endif %}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field"><span>Review</span>
+    <select name="reviewed">
+      <option value="" {% if not reviewed %}selected{% endif %}>All</option>
+      <option value="unreviewed" {% if reviewed == 'unreviewed' %}selected{% endif %}>Unreviewed</option>
+      <option value="reviewed" {% if reviewed == 'reviewed' %}selected{% endif %}>Reviewed</option>
+    </select>
+  </label>
+  <label class="field"><span>From</span><input type="date" name="start" value="{{ filters.start_raw }}"></label>
+  <label class="field"><span>To</span><input type="date" name="end" value="{{ filters.end_raw }}"></label>
+  <div class="field actions">
+    <button type="submit" class="btn primary">Apply</button>
+    <a class="btn ghost" href="{{ url_for('admin.captures_index') }}">Reset</a>
+  </div>
+</form>
+
+<p class="muted">{{ total }} capture{{ '' if total == 1 else 's' }} match.</p>
+
+{% if not captures %}
+<div class="empty"><p>No captures match these filters.</p></div>
+{% endif %}
+
+<div class="bulk-toolbar" hidden>
+  <label class="select-all"><input type="checkbox" id="selectAll"> Select all on page</label>
+  <span id="selCount" class="muted" role="status" aria-live="polite">0 selected</span>
+  <select id="bulkLabel" aria-label="Bulk reclassify to">
+    {% for lbl in reclassify_labels %}<option value="{{ lbl }}">{{ lbl }}</option>{% endfor %}
+  </select>
+  <button type="button" class="btn ghost" id="bulkRelabel">Relabel selected</button>
+  <button type="button" class="btn ghost" id="bulkReview">Mark reviewed</button>
+  <button type="button" class="btn danger" id="bulkDelete">Delete selected</button>
+  <span class="muted select-note">Selection applies to this page only.</span>
+</div>
+<div id="bulk-status" class="banner" role="status" aria-live="polite" hidden></div>
+
+<section id="grid" class="grid" aria-live="polite">
+  {% for c in captures %}
+  <article class="card" data-id="{{ c.id }}" data-full="{{ c.image_url }}"
+           data-label="{{ c.label }}" data-confidence="{{ c.confidence }}"
+           data-camera="{{ c.camera_id }}" data-ts="{{ c.capture_ts }}">
+    <input type="checkbox" class="select-box" aria-label="Select capture #{{ c.id }}">
+    <img class="thumb" loading="lazy" src="{{ c.thumb_url }}" alt="{{ c.label }} on {{ c.camera_id }}">
+    {% if c.reviewed %}<span class="pill pill-ok card-reviewed">reviewed</span>{% endif %}
+    <div class="meta">
+      <span class="label">{{ c.label }}</span>
+      <span class="conf">{{ (c.confidence * 100) | round(0) | int }}%</span>
+      <span class="cam">{{ c.camera_id }}</span>
+      <span class="ts">{{ (c.capture_ts or '')[:19] | replace('T', ' ') }}</span>
+    </div>
+    <div class="card-actions">
+      <form method="post" action="{{ url_for('admin.capture_reclassify', capture_id=c.id) }}">
+        <select name="new_label" aria-label="Reclassify">
+          {% for lbl in reclassify_labels %}
+          <option value="{{ lbl }}" {% if lbl == c.label %}selected{% endif %}>{{ lbl }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn ghost">Relabel</button>
+      </form>
+      <form method="post" action="{{ url_for('admin.capture_delete', capture_id=c.id) }}"
+            onsubmit="return confirm('Delete capture #{{ c.id }}? This removes the image files and cannot be undone.');">
+        <button type="submit" class="btn danger">Delete</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+
+<div class="pager">
+  {% if page > 1 %}<a class="btn ghost" href="{{ url_for('admin.captures_index', page=page-1, **query_args) }}">&#8249; Prev</a>{% else %}<span class="btn ghost" aria-disabled="true">&#8249; Prev</span>{% endif %}
+  <span class="muted">Page {{ page }}</span>
+  {% if has_more %}<a class="btn ghost" href="{{ url_for('admin.captures_index', page=page+1, **query_args) }}">Next &#8250;</a>{% else %}<span class="btn ghost" aria-disabled="true">Next &#8250;</span>{% endif %}
+</div>
+
+<div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="Capture viewer">
+  <button class="lb-btn lb-close" aria-label="Close">&times;</button>
+  <button class="lb-btn lb-prev" aria-label="Previous">&#8249;</button>
+  <button class="lb-btn lb-next" aria-label="Next">&#8250;</button>
+  <figure class="lb-figure">
+    <div class="lb-spinner" id="lbSpinner"></div>
+    <img id="lbImg" alt="">
+    <figcaption id="lbCap" class="lb-cap"></figcaption>
+  </figure>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const grid = document.getElementById("grid");
+  const toolbar = document.querySelector(".bulk-toolbar");
+  const selCount = document.getElementById("selCount");
+  const selectAll = document.getElementById("selectAll");
+  const status = document.getElementById("bulk-status");
+  const selected = new Set();
+
+  function refresh() {
+    selCount.textContent = selected.size + " selected";
+    toolbar.hidden = selected.size === 0 && !anyBox();
+  }
+  function anyBox() { return grid.querySelector(".select-box") !== null; }
+  if (anyBox()) toolbar.hidden = false;
+
+  function setSelected(card, on) {
+    const id = card.dataset.id;
+    card.classList.toggle("selected", on);
+    card.querySelector(".select-box").checked = on;
+    if (on) selected.add(id); else selected.delete(id);
+  }
+
+  // Selection via checkbox; everything else on the card opens the lightbox.
+  grid.addEventListener("change", (e) => {
+    const box = e.target.closest(".select-box");
+    if (!box) return;
+    setSelected(box.closest(".card"), box.checked);
+    refresh();
+  });
+  selectAll.addEventListener("change", () => {
+    grid.querySelectorAll(".card").forEach((c) => setSelected(c, selectAll.checked));
+    refresh();
+  });
+
+  function showStatus(msg, ok) {
+    status.hidden = false;
+    status.textContent = msg;
+    status.className = "banner " + (ok ? "banner-ok" : "banner-err");
+  }
+
+  async function bulk(action, extra) {
+    const ids = Array.from(selected).map(Number);
+    if (!ids.length) return;
+    if (action === "delete" &&
+        !confirm("Delete " + ids.length + " capture(s)? This removes image files and cannot be undone.")) return;
+    try {
+      const res = await fetch("{{ url_for('admin.captures_bulk') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ action: action, ids: ids }, extra || {})),
+      });
+      const data = await res.json();
+      if (!data.ok) { showStatus(data.error || "Action failed", false); return; }
+      applyResult(action, ids, extra);
+      showStatus(labelFor(action) + " " + data.affected + " capture(s).", true);
+    } catch (err) {
+      showStatus("Request failed: " + err, false);
+    }
+  }
+  function labelFor(a) { return a === "delete" ? "Deleted" : a === "reclassify" ? "Reclassified" : "Marked reviewed"; }
+
+  function applyResult(action, ids, extra) {
+    ids.forEach((id) => {
+      const card = grid.querySelector('.card[data-id="' + id + '"]');
+      if (!card) return;
+      if (action === "delete") { card.remove(); return; }
+      if (action === "reclassify" && extra && extra.label) {
+        card.querySelector(".meta .label").textContent = extra.label;
+        card.dataset.label = extra.label;
+      }
+      if (!card.querySelector(".card-reviewed")) {
+        const pill = document.createElement("span");
+        pill.className = "pill pill-ok card-reviewed";
+        pill.textContent = "reviewed";
+        card.appendChild(pill);
+      }
+    });
+    selected.clear();
+    grid.querySelectorAll(".select-box").forEach((b) => (b.checked = false));
+    grid.querySelectorAll(".card.selected").forEach((c) => c.classList.remove("selected"));
+    selectAll.checked = false;
+    refresh();
+    if (!grid.querySelector(".card")) location.reload();
+  }
+
+  document.getElementById("bulkDelete").addEventListener("click", () => bulk("delete"));
+  document.getElementById("bulkReview").addEventListener("click", () => bulk("mark_reviewed"));
+  document.getElementById("bulkRelabel").addEventListener("click", () =>
+    bulk("reclassify", { label: document.getElementById("bulkLabel").value }));
+
+  // ----- Lightbox (image click only; ignore controls) ----- //
+  const lb = document.getElementById("lightbox");
+  const lbImg = document.getElementById("lbImg");
+  const lbCap = document.getElementById("lbCap");
+  const lbSpinner = document.getElementById("lbSpinner");
+  let current = null, lastFocus = null;
+  const cards = () => Array.from(grid.querySelectorAll(".card"));
+
+  function open(card) {
+    current = card;
+    lastFocus = document.activeElement;
+    lbSpinner.hidden = false;
+    lbImg.classList.remove("ready");
+    lbImg.onload = () => { lbSpinner.hidden = true; lbImg.classList.add("ready"); };
+    lbImg.onerror = () => { lbSpinner.hidden = true; };
+    lbImg.src = card.dataset.full;
+    lbCap.innerHTML = '<strong></strong><span class="lb-cam"></span><span class="lb-ts"></span>';
+    lbCap.querySelector("strong").textContent = card.dataset.label || "";
+    lbCap.querySelector(".lb-cam").textContent = card.dataset.camera || "";
+    lbCap.querySelector(".lb-ts").textContent = (card.dataset.ts || "").slice(0, 19).replace("T", " ");
+    lb.hidden = false;
+    document.body.classList.add("noscroll");
+    lb.querySelector(".lb-close").focus();
+  }
+  function close() {
+    lb.hidden = true; lbImg.removeAttribute("src"); current = null;
+    document.body.classList.remove("noscroll");
+    if (lastFocus) lastFocus.focus();
+  }
+  function step(d) {
+    if (!current) return;
+    const all = cards(); const i = all.indexOf(current);
+    let n = i + d; if (n < 0) n = 0; if (n >= all.length) n = all.length - 1;
+    open(all[n]);
+  }
+  grid.addEventListener("click", (e) => {
+    if (e.target.closest("input,select,button,form,a")) return;  // controls don't open the lightbox
+    const card = e.target.closest(".card");
+    if (card) open(card);
+  });
+  lb.addEventListener("click", (e) => {
+    if (e.target === lb || e.target.closest(".lb-close")) close();
+    else if (e.target.closest(".lb-prev")) step(-1);
+    else if (e.target.closest(".lb-next")) step(1);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (lb.hidden) return;                 // selection keys ignored only while open
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowLeft") step(-1);
+    else if (e.key === "ArrowRight") step(1);
+  });
+})();
+</script>
+{% endblock %}
