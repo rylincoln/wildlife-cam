@@ -18,8 +18,8 @@
   =========================================================================
   EDIT BEFORE INSTALLING
   =========================================================================
-  The absolute paths below assume the deploy user is "ry" and the repo lives
-  at /Users/ry/repos/wildlife-cam. If your username or repo location
+  The absolute paths below assume the deploy user is "__USER__" and the repo lives
+  at /Users/__USER__/repos/wildlife-cam. If your username or repo location
   differs, update EVERY path below (ProgramArguments, WorkingDirectory,
   StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
   EnvironmentVariables) to match your machine.
@@ -35,7 +35,7 @@
   INSTALL
   =========================================================================
     # 0. Generate go2rtc.yaml from your config.yaml first:
-    cd /Users/ry/repos/wildlife-cam && .venv/bin/wildlife-stream-config
+    cd /Users/__USER__/repos/wildlife-cam && .venv/bin/wildlife-stream-config
 
     # 1. Copy into the system-wide LaunchDaemons directory:
     sudo cp launchd/com.wildlife.stream.plist /Library/LaunchDaemons/
@@ -45,7 +45,7 @@
     sudo chmod 644       /Library/LaunchDaemons/com.wildlife.stream.plist
 
     # 3. Make sure the log directory exists and is writable by the run user:
-    mkdir -p /Users/ry/wildlife/logs
+    mkdir -p /Users/__USER__/wildlife/logs
 
     # 4. Load (and start, because RunAtLoad=true) the daemon:
     sudo launchctl load /Library/LaunchDaemons/com.wildlife.stream.plist
@@ -60,15 +60,15 @@
     sudo launchctl list | grep com.wildlife
 
     # Tail the logs:
-    tail -f /Users/ry/wildlife/logs/stream.out.log \
-            /Users/ry/wildlife/logs/stream.err.log
+    tail -f /Users/__USER__/wildlife/logs/stream.out.log \
+            /Users/__USER__/wildlife/logs/stream.err.log
 
     # Then browse from any LAN device to http://<mac-mini-ip>:8080/live
     # (the gallery embeds go2rtc's player from the api port, default 1984).
 
   Notes:
     * LaunchDaemons run as root by default; UserName below makes the process
-      run as "ry" so HOME / relative paths resolve to that account.
+      run as "__USER__" so HOME / relative paths resolve to that account.
     * KeepAlive=true relaunches go2rtc if it crashes; RunAtLoad=true starts it
       immediately on load and at every boot.
     * On-demand: go2rtc opens a camera's RTSP stream only while someone is
@@ -85,7 +85,7 @@
 
     <!-- Run as the deploy user (EDIT to your username) so ~ resolves correctly. -->
     <key>UserName</key>
-    <string>ry</string>
+    <string>__USER__</string>
 
     <!-- The go2rtc binary + generated config.
          EDIT the go2rtc binary path below to wherever you installed it
@@ -96,12 +96,12 @@
     <array>
         <string>/opt/homebrew/bin/go2rtc</string>
         <string>-config</string>
-        <string>/Users/ry/repos/wildlife-cam/go2rtc.yaml</string>
+        <string>/Users/__USER__/repos/wildlife-cam/go2rtc.yaml</string>
     </array>
 
     <!-- cwd so relative paths resolve against the repo. -->
     <key>WorkingDirectory</key>
-    <string>/Users/ry/repos/wildlife-cam</string>
+    <string>/Users/__USER__/repos/wildlife-cam</string>
 
     <!-- Start at boot / on load. -->
     <key>RunAtLoad</key>
@@ -121,18 +121,18 @@
 
     <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
     <key>StandardOutPath</key>
-    <string>/Users/ry/wildlife/logs/stream.out.log</string>
+    <string>/Users/__USER__/wildlife/logs/stream.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ry/wildlife/logs/stream.err.log</string>
+    <string>/Users/__USER__/wildlife/logs/stream.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <!-- venv + Homebrew (Apple Silicon) on PATH. -->
         <key>PATH</key>
-        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- HOME so "~" resolves to the deploy user. -->
         <key>HOME</key>
-        <string>/Users/ry</string>
+        <string>/Users/__USER__</string>
         <!-- Unbuffered Python so log lines flush promptly. -->
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>

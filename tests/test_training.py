@@ -193,6 +193,32 @@ def test_convert_skips_missing_source(tmp_path: Path) -> None:
     assert not (out / "S" / "gone.txt").exists()    # missing source -> no broken symlink/label
 
 
+def test_convert_no_sequence_groups_per_image(tmp_path: Path) -> None:
+    # A dataset with no seq_id/location (like ENA24) gives each image its own
+    # group so a downstream split is per-image, not all-in-one.
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    for f in ("a.jpg", "b.jpg"):
+        (imgs / f).write_bytes(b"x")
+    cct = {
+        "categories": [{"id": 1, "name": "Coyote"}],
+        "images": [{"id": "1", "file_name": "a.jpg", "width": 100, "height": 100},
+                   {"id": "2", "file_name": "b.jpg", "width": 100, "height": 100}],
+        "annotations": [{"id": "x", "image_id": "1", "category_id": 1, "bbox": [10, 10, 20, 20]},
+                        {"id": "y", "image_id": "2", "category_id": 1, "bbox": [10, 10, 20, 20]}],
+    }
+    cctp = tmp_path / "c.json"
+    cctp.write_text(__import__("json").dumps(cct))
+    out = tmp_path / "out"
+    r = subprocess.run(
+        [sys.executable, str(_TRAINING / "convert_lila.py"), "--images", str(imgs),
+         "--cct", str(cctp), "--out", str(out), "--tiers", "1"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (out / "img_1" / "a.txt").exists() and (out / "img_2" / "b.txt").exists()
+
+
 # --------------------------------------------------------------------------- #
 # download_lila (subset selection)
 # --------------------------------------------------------------------------- #

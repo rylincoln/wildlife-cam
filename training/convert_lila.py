@@ -12,8 +12,10 @@ ENA24, etc. into YOLO training data. Handles both shapes the research pinned:
   get the image's species.
 
 Output pool: ``<out>/<group>/<name>.jpg`` (symlink) + sibling ``.txt``, grouped by
-``seq_id`` (then ``location``) so prepare_dataset.py's default parent-dir grouping
-keeps burst frames together. Categories outside the active class set are **not**
+``seq_id`` (then ``location``, then a per-image key for sequence-less datasets)
+so prepare_dataset.py's default parent-dir grouping keeps burst frames together
+while independent images (e.g. ENA24) still split per-image. Categories outside
+the active class set are **not**
 silently turned into background — those images are skipped, so the model never
 learns a real animal as "nothing".
 
@@ -131,7 +133,11 @@ def main() -> int:
         src_img = images_root / file_name
         if not src_img.is_file():
             return False  # e.g. privacy-removed images absent from the public zip
-        group = str(image.get("seq_id") or image.get("location") or "misc")
+        # Group by sequence/event so prepare_dataset's default split keeps bursts
+        # together. Datasets with no seq/location (e.g. ENA24) are independent
+        # images -> give each its own group so they split per-image instead of all
+        # landing in one split.
+        group = str(image.get("seq_id") or image.get("location") or f"img_{image['id']}")
         safe = file_name.replace("/", "__").replace("\\", "__")
         dst_img = out / group / safe
         dst_img.parent.mkdir(parents=True, exist_ok=True)

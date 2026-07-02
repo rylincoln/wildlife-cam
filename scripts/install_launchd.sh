@@ -55,7 +55,10 @@ for L in detect gallery stream reload; do
   DST="$DEST/com.wildlife.$L.plist"
   printf '\n==> com.wildlife.%s\n' "$L"
   if [ ! -f "$SRC" ]; then echo "    MISSING source: $SRC"; rc=1; continue; fi
-  cp "$SRC" "$DST" && chown root:wheel "$DST" && chmod 644 "$DST" \
+  # The committed plists use __USER__ / /Users/__USER__ placeholders (so the repo
+  # carries no personal username); substitute the deploy user + home on install.
+  sed -e "s#/Users/__USER__#${DEPLOY_HOME}#g" -e "s#__USER__#${DEPLOY_USER}#g" "$SRC" > "$DST" \
+    && chown root:wheel "$DST" && chmod 644 "$DST" \
     || { echo "    copy failed"; rc=1; continue; }
   # Unload any prior instance so bootstrap doesn't error on "already loaded".
   launchctl bootout system "$DST" 2>/dev/null

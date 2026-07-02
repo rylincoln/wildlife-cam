@@ -12,8 +12,8 @@
   -------------------------------------------------------------------------
   EDIT BEFORE INSTALLING
   -------------------------------------------------------------------------
-  The absolute paths below assume the deploy user is "ry" and the repo lives
-  at /Users/ry/repos/wildlife-cam. If your username or repo location
+  The absolute paths below assume the deploy user is "__USER__" and the repo lives
+  at /Users/__USER__/repos/wildlife-cam. If your username or repo location
   differs, update EVERY path below (ProgramArguments, WorkingDirectory,
   StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
   EnvironmentVariables) to match your machine.
@@ -33,7 +33,7 @@
     sudo chmod 644       /Library/LaunchDaemons/com.wildlife.detect.plist
 
     # 3. Make sure the log directory exists and is writable by the run user:
-    mkdir -p /Users/ry/wildlife/logs
+    mkdir -p /Users/__USER__/wildlife/logs
 
     # 4. Load (and start, because RunAtLoad=true) the daemon:
     sudo launchctl load /Library/LaunchDaemons/com.wildlife.detect.plist
@@ -48,12 +48,12 @@
     sudo launchctl list | grep com.wildlife
 
     # Tail the logs:
-    tail -f /Users/ry/wildlife/logs/detect.out.log \
-            /Users/ry/wildlife/logs/detect.err.log
+    tail -f /Users/__USER__/wildlife/logs/detect.out.log \
+            /Users/__USER__/wildlife/logs/detect.err.log
 
   Notes:
     * LaunchDaemons run as root by default; UserName below makes the process
-      run as "ry" so "~" and the captures dir resolve to that account.
+      run as "__USER__" so "~" and the captures dir resolve to that account.
     * KeepAlive=true relaunches the worker if it crashes; RunAtLoad=true starts
       it immediately on load and at every boot.
   ===========================================================================
@@ -66,17 +66,17 @@
 
     <!-- Run as the deploy user (EDIT to your username) so ~ resolves correctly. -->
     <key>UserName</key>
-    <string>ry</string>
+    <string>__USER__</string>
 
     <!-- The detection worker entry point installed into the venv. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ry/repos/wildlife-cam/.venv/bin/wildlife-worker</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin/wildlife-worker</string>
     </array>
 
     <!-- cwd so relative paths (config.yaml, models/) resolve against the repo. -->
     <key>WorkingDirectory</key>
-    <string>/Users/ry/repos/wildlife-cam</string>
+    <string>/Users/__USER__/repos/wildlife-cam</string>
 
     <!-- Start at boot / on load. -->
     <key>RunAtLoad</key>
@@ -94,23 +94,23 @@
 
     <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
     <key>StandardOutPath</key>
-    <string>/Users/ry/wildlife/logs/detect.out.log</string>
+    <string>/Users/__USER__/wildlife/logs/detect.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ry/wildlife/logs/detect.err.log</string>
+    <string>/Users/__USER__/wildlife/logs/detect.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <!-- Homebrew (Apple Silicon) on PATH so FFmpeg/ffprobe are found for RTSP/HEVC. -->
         <key>PATH</key>
-        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- HOME so "~" in config (captures_dir, db_path) expands to the deploy user. -->
         <key>HOME</key>
-        <string>/Users/ry</string>
+        <string>/Users/__USER__</string>
         <!-- Unbuffered Python so log lines flush promptly. -->
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <!-- Optional: point at an explicit config file if not using ./config.yaml. -->
-        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/ry/repos/wildlife-cam/config.yaml</string> -->
+        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/__USER__/repos/wildlife-cam/config.yaml</string> -->
     </dict>
 </dict>
 </plist>

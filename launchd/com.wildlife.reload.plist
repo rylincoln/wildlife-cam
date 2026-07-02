@@ -19,8 +19,8 @@
   =========================================================================
   EDIT BEFORE INSTALLING
   =========================================================================
-  As with the other plists, the absolute paths assume deploy user "ry" and repo
-  /Users/ry/repos/wildlife-cam. Update EVERY path (ProgramArguments, cwd,
+  As with the other plists, the absolute paths assume deploy user "__USER__" and repo
+  /Users/__USER__/repos/wildlife-cam. Update EVERY path (ProgramArguments, cwd,
   WatchPaths, StandardOut/ErrorPath, PATH/HOME) if yours differ. HOME must be the
   deploy user's home so "~" in storage paths validates the same way it does for
   the worker.
@@ -31,16 +31,16 @@
     sudo cp launchd/com.wildlife.reload.plist /Library/LaunchDaemons/
     sudo chown root:wheel /Library/LaunchDaemons/com.wildlife.reload.plist
     sudo chmod 644       /Library/LaunchDaemons/com.wildlife.reload.plist
-    touch /Users/ry/repos/wildlife-cam/.reload.trigger   # WatchPaths target must exist
+    touch /Users/__USER__/repos/wildlife-cam/.reload.trigger   # WatchPaths target must exist
     sudo launchctl bootstrap system /Library/LaunchDaemons/com.wildlife.reload.plist
 
   =========================================================================
   MANAGE
   =========================================================================
     # Watch it fire (edit something in /admin, or `touch` the trigger):
-    tail -f /Users/ry/wildlife/logs/reload.out.log /Users/ry/wildlife/logs/reload.err.log
+    tail -f /Users/__USER__/wildlife/logs/reload.out.log /Users/__USER__/wildlife/logs/reload.err.log
     # Last-apply status the dashboard reads:
-    cat /Users/ry/repos/wildlife-cam/.reload.status.json
+    cat /Users/__USER__/repos/wildlife-cam/.reload.status.json
   ===========================================================================
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,7 +65,7 @@
          point ProgramArguments/WorkingDirectory at it with absolute paths. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ry/repos/wildlife-cam/.venv/bin/python</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin/python</string>
         <string>-P</string>
         <string>-m</string>
         <string>wildlife.reload_agent</string>
@@ -75,13 +75,13 @@
 
     <!-- cwd so the relative config.yaml / go2rtc.yaml resolve to the repo. -->
     <key>WorkingDirectory</key>
-    <string>/Users/ry/repos/wildlife-cam</string>
+    <string>/Users/__USER__/repos/wildlife-cam</string>
 
     <!-- Fire whenever the admin UI touches this trigger file. It must exist at
          load time (install script creates it). -->
     <key>WatchPaths</key>
     <array>
-        <string>/Users/ry/repos/wildlife-cam/.reload.trigger</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.reload.trigger</string>
     </array>
 
     <!-- One-shot: don't start on load, don't relaunch; only run on trigger. -->
@@ -91,19 +91,19 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/ry/wildlife/logs/reload.out.log</string>
+    <string>/Users/__USER__/wildlife/logs/reload.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ry/wildlife/logs/reload.err.log</string>
+    <string>/Users/__USER__/wildlife/logs/reload.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <!-- /bin + /usr/bin so `launchctl` is found; venv + Homebrew for the rest. -->
         <key>PATH</key>
-        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- HOME must be the deploy user's home so "~" storage paths validate
              identically to the worker (this job runs as root). -->
         <key>HOME</key>
-        <string>/Users/ry</string>
+        <string>/Users/__USER__</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>
