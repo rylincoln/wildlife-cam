@@ -505,3 +505,26 @@ def test_bulk_update_and_mark_reviewed(tmp_path: Path) -> None:
         assert store.mark_reviewed_many(ids) == 0
     finally:
         store.close()
+
+
+def test_count_and_reviewed_filter(tmp_path: Path) -> None:
+    store = _new_store(tmp_path)
+    try:
+        ids = [
+            store.save_capture(
+                camera_id="cam", event_ts=datetime(2020, 1, 1),
+                capture_ts=datetime(2020, 1, 1), frame=_make_frame(), det=_det(),
+            )
+            for _ in range(3)
+        ]
+        assert store.count() == 3
+        store.update_label(ids[0], "deer")  # marks one reviewed
+
+        assert store.count(reviewed=True) == 1
+        assert store.count(reviewed=False) == 2
+        assert len(store.query(reviewed=False)) == 2
+        assert len(store.query(reviewed=True)) == 1
+        # count mirrors query length under the same filters.
+        assert store.count(camera_id="cam") == len(store.query(camera_id="cam", limit=1000))
+    finally:
+        store.close()
