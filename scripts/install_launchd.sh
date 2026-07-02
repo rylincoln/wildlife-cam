@@ -2,10 +2,16 @@
 #
 # install_launchd.sh — install the wildlife-cam LaunchDaemons for 24/7 operation.
 #
-# Copies launchd/com.wildlife.{detect,gallery,stream}.plist into
+# Copies launchd/com.wildlife.{detect,gallery,stream,reload}.plist into
 # /Library/LaunchDaemons, sets root:wheel 0644, and (re)loads them via launchctl
 # so they start now (RunAtLoad) and at every boot, relaunching on crash
 # (KeepAlive). Idempotent: safe to re-run after editing a plist or config.
+#
+# The 4th daemon (reload) is the admin UI's privileged applier: it runs as root,
+# is triggered by launchd WatchPaths on ./.reload.trigger, and re-validates +
+# regenerates go2rtc.yaml + restarts the worker/go2rtc when the admin saves a
+# change. It is one-shot (no RunAtLoad/KeepAlive), so it won't show a PID in
+# `launchctl list` until it next fires.
 #
 # The plists contain absolute paths and a UserName — edit them for your machine
 # first (see the header comment in each). This script only copies + loads them;
@@ -37,8 +43,14 @@ DEPLOY_USER="${SUDO_USER:-$(stat -f%Su "$REPO")}"
 DEPLOY_HOME="$(eval echo "~${DEPLOY_USER}")"
 install -d -o "$DEPLOY_USER" -g staff "$DEPLOY_HOME/wildlife/logs"
 
+# The reloader's WatchPaths target must exist at load time and be writable by
+# the (unprivileged) gallery user, which touches it after an admin edit.
+TRIGGER="$REPO/.reload.trigger"
+[ -f "$TRIGGER" ] || : > "$TRIGGER"
+chown "$DEPLOY_USER":staff "$TRIGGER" && chmod 664 "$TRIGGER"
+
 rc=0
-for L in detect gallery stream; do
+for L in detect gallery stream reload; do
   SRC="$REPO/launchd/com.wildlife.$L.plist"
   DST="$DEST/com.wildlife.$L.plist"
   printf '\n==> com.wildlife.%s\n' "$L"
@@ -59,5 +71,6 @@ done
 
 printf '\n==> Loaded wildlife daemons (PID / laststatus / label):\n'
 launchctl list | grep com.wildlife || echo "   (none listed — check errors above)"
-printf '\nLogs: %s/wildlife/logs/{detect,gallery,stream}.{out,err}.log\n' "$DEPLOY_HOME"
+printf '\nLogs: %s/wildlife/logs/{detect,gallery,stream,reload}.{out,err}.log\n' "$DEPLOY_HOME"
+printf 'Admin: set a password with  .venv/bin/wildlife-admin-password  then open /admin\n'
 exit $rc

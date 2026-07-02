@@ -5,7 +5,7 @@
 #
 # Installs / sets up:
 #   1. Homebrew ffmpeg          (RTSP / H.265 decode + go2rtc virtual source)
-#   2. Python 3.12 venv + the project with the detect/cameras/dev extras
+#   2. Python 3.12 venv + the project with the detect/cameras/dev/admin extras
 #   3. go2rtc (arm64)           (optional Live view companion)
 #   4. ~/wildlife/logs and a config.yaml copied from the example
 #   5. Hardware-free unit tests as a smoke check
@@ -51,10 +51,10 @@ else
 fi
 
 # ------------------------------------------------------- 3. python venv + pkg
-say "Creating Python $PYTHON_VERSION venv and installing the project (.[detect,cameras,dev])"
+say "Creating Python $PYTHON_VERSION venv and installing the project (.[detect,cameras,dev,admin])"
 if have uv; then
   [ -d .venv ] || uv venv --python "$PYTHON_VERSION" .venv
-  uv pip install -p .venv -e '.[detect,cameras,dev]'
+  uv pip install -p .venv -e '.[detect,cameras,dev,admin]'
 else
   warn "uv not found (recommended: 'brew install uv'); falling back to python$PYTHON_VERSION + pip."
   if ! have "python$PYTHON_VERSION"; then
@@ -63,7 +63,7 @@ else
   fi
   [ -d .venv ] || "python$PYTHON_VERSION" -m venv .venv
   ./.venv/bin/python -m pip install --upgrade pip
-  ./.venv/bin/pip install -e '.[detect,cameras,dev]'
+  ./.venv/bin/pip install -e '.[detect,cameras,dev,admin]'
 fi
 echo "venv ready: $(./.venv/bin/python --version)"
 ./.venv/bin/python - <<'PY'

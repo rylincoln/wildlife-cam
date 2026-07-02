@@ -24,6 +24,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from datetime import datetime, time
 from pathlib import Path
@@ -111,19 +112,27 @@ def _parse_filters(args) -> dict:
 # --------------------------------------------------------------------------- #
 # Application factory
 # --------------------------------------------------------------------------- #
-def create_app(config: Config) -> Flask:
+def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     """Build the Flask gallery app for a validated :class:`Config`.
 
     Args:
         config: Fully validated configuration tree. ``config.storage`` locates
             the SQLite DB and captures directory; ``config.gallery.page_size``
             controls pagination.
+        config_path: Path to ``config.yaml``. When given, the gallery (a) reloads
+            request-time settings (cameras, livestream) live when the file changes
+            on disk, so admin edits show up without a restart, and (b) mounts the
+            password-gated ``/admin`` blueprint that can edit that file. Storage
+            paths and page size are still read once at boot.
 
     Returns:
         A configured :class:`flask.Flask` instance with the gallery routes
         registered. Bind/serve it via :func:`main` (or your own runner).
     """
     app = Flask(__name__)
+    # Random per-process key: only used to sign flash-message cookies in /admin.
+    # Auth itself is stateless HTTP Basic, so a fresh key each restart is fine.
+    app.secret_key = os.urandom(32)
 
     storage = config.storage
     captures_dir = Path(storage.captures_dir).resolve()
@@ -134,6 +143,30 @@ def create_app(config: Config) -> Flask:
         CAPTURES_DIR=captures_dir,
         PAGE_SIZE=page_size,
     )
+
+    # Live config reload: request-time reads go through get_config(), which
+    # reloads config.yaml when its mtime changes so admin edits (and the
+    # reloader) are reflected in the gallery without restarting it. Storage/DB
+    # paths captured above are intentionally *not* hot-swapped.
+    _cfg_cache: dict = {"mtime": None, "config": config}
+
+    def get_config() -> Config:
+        if config_path is None:
+            return _cfg_cache["config"]
+        try:
+            mtime = os.path.getmtime(config_path)
+        except OSError:
+            return _cfg_cache["config"]
+        if mtime != _cfg_cache["mtime"]:
+            # Advance the remembered mtime first so an invalid file on disk is
+            # parsed (and logged) once per change, not on every request.
+            _cfg_cache["mtime"] = mtime
+            try:
+                _cfg_cache["config"] = load_config(config_path)
+                logger.info("Reloaded config from %s", config_path)
+            except Exception:  # noqa: BLE001 - keep serving the last good config
+                logger.exception("Failed to reload %s; keeping previous config", config_path)
+        return _cfg_cache["config"]
 
     def _new_store() -> Store:
         return Store(
@@ -176,7 +209,7 @@ def create_app(config: Config) -> Flask:
         it from the request's host (port stripped) plus the configured
         ``go2rtc_port`` so the same gallery works from any LAN client.
         """
-        ls = config.livestream
+        ls = get_config().livestream
         if ls.go2rtc_url:
             return ls.go2rtc_url.rstrip("/")
         host = request.host.split(":")[0]
@@ -194,7 +227,7 @@ def create_app(config: Config) -> Flask:
         tiles carry independent player transports (``sub_mode`` / ``main_mode``)
         because the sub and main streams typically use different codecs.
         """
-        ls = config.livestream
+        ls = get_config().livestream
         return {
             "id": camera.id,
             "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", ls.sub_mode),
@@ -204,11 +237,12 @@ def create_app(config: Config) -> Flask:
     @app.route("/live")
     def live():
         """Render the live grid of every camera's go2rtc player embed."""
-        ls = config.livestream
+        cfg = get_config()
+        ls = cfg.livestream
         if not ls.enabled:
             abort(404)
         base = _live_base()
-        cameras = [_camera_live(base, cam) for cam in config.cameras]
+        cameras = [_camera_live(base, cam) for cam in cfg.cameras]
         return render_template(
             "live.html",
             cameras=cameras,
@@ -220,10 +254,11 @@ def create_app(config: Config) -> Flask:
     @app.route("/live/<camera_id>")
     def live_camera(camera_id: str):
         """Render a single enlarged live player for one camera id."""
-        ls = config.livestream
+        cfg = get_config()
+        ls = cfg.livestream
         if not ls.enabled:
             abort(404)
-        camera = next((c for c in config.cameras if c.id == camera_id), None)
+        camera = next((c for c in cfg.cameras if c.id == camera_id), None)
         if camera is None:
             abort(404)
         base = _live_base()
@@ -299,7 +334,8 @@ def create_app(config: Config) -> Flask:
             page=page,
             page_size=page_size,
             has_more=has_more,
-            livestream_enabled=config.livestream.enabled,
+            livestream_enabled=get_config().livestream.enabled,
+            admin_enabled=bool(config_path) and get_config().admin.enabled,
         )
 
     @app.route("/api/captures")
@@ -347,6 +383,14 @@ def create_app(config: Config) -> Flask:
             abort(404)
         return send_file(full, mimetype="image/jpeg", conditional=True)
 
+    # ----------------------------------------------------------------------- #
+    # Admin (config editing) -- only when we know the config path to write to.
+    # ----------------------------------------------------------------------- #
+    if config_path is not None:
+        from wildlife.admin.routes import create_admin_blueprint
+
+        app.register_blueprint(create_admin_blueprint(config_path, get_config))
+
     return app
 
 
@@ -357,9 +401,9 @@ def main() -> None:
 
         python -m wildlife.gallery.app [config.yaml]
 
-    Binds to ``config.gallery.host``/``config.gallery.port``. No auth is applied
-    (LAN-only by design); exposing beyond the LAN requires a reverse proxy with
-    auth + TLS.
+    Binds to ``config.gallery.host``/``config.gallery.port``. The browsing routes
+    apply no auth (LAN-only by design); the ``/admin`` config editor is separately
+    password-gated. Exposing beyond the LAN requires a reverse proxy with TLS.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -367,7 +411,7 @@ def main() -> None:
     )
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     config = load_config(config_path)
-    app = create_app(config)
+    app = create_app(config, config_path=config_path)
     host, port = config.gallery.host, config.gallery.port
     logger.info("Starting wildlife gallery on http://%s:%s", host, port)
     # threaded=True: each request thread gets its own per-request Store/connection.

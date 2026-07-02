@@ -1,0 +1,116 @@
+{% extends "admin/base.html" %}
+{% block title %}{% if is_new %}Add camera{% else %}Edit {{ v.id }}{% endif %}{% endblock %}
+{% block content %}
+<form class="admin-form" id="cam-form" method="post"
+      action="{% if is_new %}{{ url_for('admin.camera_new') }}{% else %}{{ url_for('admin.camera_edit', cam_id=original_id) }}{% endif %}">
+  <input type="hidden" id="original_id" name="original_id" value="{{ original_id }}">
+  <fieldset class="panel">
+    <legend>{% if is_new %}New camera{% else %}Edit camera{% endif %}</legend>
+    <label class="field"><span>ID (unique, e.g. north_field)</span>
+      <input type="text" name="id" value="{{ v.id }}" required pattern="[A-Za-z0-9_\-]+"
+             title="letters, digits, underscore, hyphen"></label>
+    <label class="field"><span>Host / IP</span>
+      <input type="text" name="host" value="{{ v.host }}" required placeholder="192.168.1.71"></label>
+    <label class="field"><span>Username</span>
+      <input type="text" name="username" value="{{ v.username }}" required autocomplete="off"></label>
+    <label class="field"><span>Password{% if not is_new %} (blank = keep current){% endif %}</span>
+      <input type="password" name="password" value="" autocomplete="new-password"
+             {% if not is_new %}placeholder="••••••••"{% endif %}></label>
+    <label class="field wide"><span>RTSP main URL</span>
+      <input type="text" name="rtsp_main" value="{{ v.rtsp_main }}" required spellcheck="false"></label>
+    <label class="field wide"><span>RTSP sub URL</span>
+      <input type="text" name="rtsp_sub" value="{{ v.rtsp_sub }}" required spellcheck="false"></label>
+    <label class="field"><span>ONVIF port</span>
+      <input type="number" name="onvif_port" value="{{ v.onvif_port }}" min="1" max="65535"></label>
+    <p class="muted"><code>{username}</code>, <code>{password}</code>, <code>{host}</code> in the RTSP URLs
+       are filled in from the fields above.</p>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="button" class="btn ghost" id="test-btn">Test camera</button>
+    <button type="submit" class="btn primary">Save &amp; apply</button>
+    <a class="btn ghost" href="{{ url_for('admin.cameras') }}">Cancel</a>
+  </div>
+  <div id="test-result" class="test-result" hidden></div>
+
+  <label class="field check danger-check">
+    <input type="checkbox" name="skip_test">
+    <span>Save without testing (advanced — skips the pre-save frame grab)</span>
+  </label>
+  <p class="muted">On save, the camera's <b>{{ ' ' }}</b>capture stream is grabbed once to confirm it works
+     before writing config, unless the box above is ticked.</p>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const btn = document.getElementById("test-btn");
+  const out = document.getElementById("test-result");
+  const form = document.getElementById("cam-form");
+  const testUrl = "{{ url_for('admin.test_camera') }}";
+
+  function line(cls, text) {
+    const p = document.createElement("p");
+    p.className = cls;
+    p.textContent = text;
+    return p;
+  }
+
+  function render(data) {
+    out.hidden = false;
+    out.innerHTML = "";
+    if (data.error) {
+      out.className = "test-result bad";
+      out.appendChild(line("", "Error: " + data.error));
+      return;
+    }
+    let anyOk = false;
+    const streams = data.streams || {};
+    Object.keys(streams).forEach(function (name) {
+      const s = streams[name];
+      if (s.ok) {
+        anyOk = true;
+        out.appendChild(line("ok", "✓ " + name + " stream: " + s.width + "×" + s.height + "  (" + (s.url || "") + ")"));
+      } else {
+        out.appendChild(line("bad", "✗ " + name + " stream: " + (s.error || "failed")));
+      }
+    });
+    const r = data.reolink || {};
+    if (r.attempted) {
+      if (r.ok) {
+        out.appendChild(line("ok", "✓ Reolink " + (r.model || "") + " — channels " + JSON.stringify(r.channels) +
+          ", AI: " + ((r.ai_types || []).join(", ") || "none")));
+      } else {
+        out.appendChild(line("bad", "✗ Reolink connect: " + (r.error || "failed")));
+      }
+    }
+    out.className = "test-result " + (anyOk ? "good" : "bad");
+  }
+
+  btn.addEventListener("click", async function () {
+    const params = Object.fromEntries(new FormData(form).entries());
+    out.hidden = false;
+    out.className = "test-result testing";
+    out.innerHTML = "";
+    out.appendChild(line("", "Testing… grabbing a frame and connecting (up to ~1 min)."));
+    btn.disabled = true;
+    try {
+      const res = await fetch(testUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      });
+      render(await res.json());
+    } catch (e) {
+      out.className = "test-result bad";
+      out.innerHTML = "";
+      out.appendChild(line("", "Test request failed: " + e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -249,16 +249,73 @@ shows no live link.)
 
 ---
 
+## Admin (config editor, optional)
+
+A password-gated **`/admin`** section in the gallery lets you edit detection
+tuning and add/configure cameras from the browser — without hand-editing
+`config.yaml`. It is built to be hard to footgun:
+
+- **Validated writes.** Every save is checked through the *same*
+  pyyaml → pydantic path the daemons load with (types, ranges, unique camera
+  ids, RTSP scheme). A bad edit is rejected with a field-level message and the
+  file on disk is left untouched.
+- **Test-before-save.** Adding/editing a camera runs a real probe — it grabs a
+  live RTSP frame and connects via `reolink-aio` (verifying credentials,
+  reachability, channels, and AI object types). On save, the detector's capture
+  stream is grabbed once to confirm it works before the config is written
+  (tick *Save without testing* to override).
+- **Safe on disk.** Writes are atomic (temp file + rename), preserve your YAML
+  comments, and keep timestamped backups in `.config-backups/`.
+
+**Enable it:**
+
+```bash
+# 1. Ensure the admin extra is installed (setup_macos.sh already includes it):
+uv pip install -p .venv -e '.[admin]'          # adds ruamel.yaml
+
+# 2. Set an admin password (stored only as a hash in config.yaml):
+.venv/bin/wildlife-admin-password
+
+# 3. Open http://<mac-LAN-ip>:8080/admin  (log in with any username + that password)
+```
+
+**How saved changes take effect.** Detection/camera edits are consumed by the
+*worker* and *go2rtc*, which must restart to pick them up — the gallery can't do
+that itself. The optional **reloader daemon** (`com.wildlife.reload`, installed
+by `scripts/install_launchd.sh`) watches for edits and, as root, re-validates the
+config, regenerates `go2rtc.yaml`, and restarts the worker + go2rtc within a few
+seconds. The dashboard shows the last-apply status. If the reloader isn't
+installed, saves still persist — just restart manually:
+
+```bash
+sudo launchctl kickstart -k system/com.wildlife.detect
+sudo launchctl kickstart -k system/com.wildlife.stream
+```
+
+**Security.** The admin section is separately password-protected (unlike the
+open, read-only gallery), but the password crosses the LAN via HTTP Basic Auth —
+keep it LAN-only, or front it with a reverse proxy providing TLS. With no
+password set, `/admin` fails closed (403).
+
+---
+
 ## Running as a service (launchd)
 
 For 24/7 operation, install the worker and gallery as **LaunchDaemons** (not
 LaunchAgents) so they start at boot without an interactive login and relaunch on
-crash. Example plists live under `launchd/`.
+crash. Example plists live under `launchd/`. The easiest path is
+`sudo bash scripts/install_launchd.sh`, which installs all daemons
+(worker, gallery, go2rtc, and the admin reloader), creates the log dir, and
+arms the reload trigger.
 
 - Use a **LaunchDaemon** (`/Library/LaunchDaemons/com.wildlife.detect.plist` and
   `com.wildlife.gallery.plist`). If you enabled live view, there is an optional
   **third** LaunchDaemon, `com.wildlife.stream.plist`, that runs go2rtc (see
-  [Live view (optional)](#live-view-optional)).
+  [Live view (optional)](#live-view-optional)). If you use the admin editor,
+  there is an optional **fourth**, `com.wildlife.reload.plist`, that applies
+  saved config changes (see [Admin](#admin-config-editor-optional)); it runs as
+  **root** (no `UserName`) and is `WatchPaths`-triggered, so it stays idle until
+  an edit occurs.
 - Set `<key>UserName</key>` to your account so paths under `~` and the captures
   directory resolve to your user (LaunchDaemons run as root by default), or use
   absolute paths in `config.yaml`.

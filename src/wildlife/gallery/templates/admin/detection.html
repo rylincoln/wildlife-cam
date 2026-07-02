@@ -1,0 +1,76 @@
+{% extends "admin/base.html" %}
+{% block title %}Detection{% endblock %}
+{% block content %}
+<form class="admin-form" method="post" action="{{ url_for('admin.detection') }}">
+  <fieldset class="panel">
+    <legend>Model</legend>
+    <label class="field">
+      <span>Model path</span>
+      <input type="text" name="model_path" value="{{ v.model_path }}" required
+             placeholder="models/yolov8s.pt">
+    </label>
+    <label class="field">
+      <span>Device</span>
+      <select name="device">
+        <option value="mps" {% if v.device == 'mps' %}selected{% endif %}>mps (Apple GPU)</option>
+        <option value="cpu" {% if v.device == 'cpu' %}selected{% endif %}>cpu</option>
+      </select>
+    </label>
+    <label class="field wide">
+      <span>Animal classes (one per line or comma-separated)</span>
+      <textarea name="animal_classes" rows="5" spellcheck="false">{{ v.animal_classes }}</textarea>
+    </label>
+  </fieldset>
+
+  <fieldset class="panel">
+    <legend>Gate</legend>
+    <label class="field">
+      <span>Confidence threshold (0–1)</span>
+      <input type="number" name="confidence_threshold" step="0.01" min="0" max="1" value="{{ v.confidence_threshold }}">
+    </label>
+    <label class="field">
+      <span>Min box area fraction (0–1)</span>
+      <input type="number" name="min_box_area_frac" step="0.001" min="0" max="1" value="{{ v.min_box_area_frac }}">
+    </label>
+    <label class="field check">
+      <input type="checkbox" name="save_best_only" {% if v.save_best_only %}checked{% endif %}>
+      <span>Save best frame only (vs. every positive)</span>
+    </label>
+  </fieldset>
+
+  <fieldset class="panel">
+    <legend>Capture</legend>
+    <label class="field">
+      <span>Stream</span>
+      <select name="stream">
+        <option value="main" {% if v.stream == 'main' %}selected{% endif %}>main (4K)</option>
+        <option value="sub" {% if v.stream == 'sub' %}selected{% endif %}>sub (lighter)</option>
+      </select>
+    </label>
+    <label class="field"><span>Burst frames</span>
+      <input type="number" name="burst_frames" min="1" value="{{ v.burst_frames }}"></label>
+    <label class="field"><span>Burst interval (ms)</span>
+      <input type="number" name="burst_interval_ms" min="0" value="{{ v.burst_interval_ms }}"></label>
+    <label class="field"><span>RTSP timeout (s)</span>
+      <input type="number" name="rtsp_timeout_s" min="1" value="{{ v.rtsp_timeout_s }}"></label>
+    <label class="field"><span>Max concurrent</span>
+      <input type="number" name="max_concurrent" min="1" value="{{ v.max_concurrent }}"></label>
+  </fieldset>
+
+  <fieldset class="panel">
+    <legend>Throttling</legend>
+    <label class="field"><span>Dedupe cooldown (s)</span>
+      <input type="number" name="cooldown_s" min="0" value="{{ v.cooldown_s }}"></label>
+    <label class="field"><span>Detect every Nth event</span>
+      <input type="number" name="detect_every_nth_event" min="1" value="{{ v.detect_every_nth_event }}"></label>
+    <label class="field"><span>Max bursts / minute</span>
+      <input type="number" name="max_burst_per_minute" min="1" value="{{ v.max_burst_per_minute }}"></label>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn primary">Save &amp; apply</button>
+    <a class="btn ghost" href="{{ url_for('admin.dashboard') }}">Cancel</a>
+    <span class="muted">Saving restarts the detector.</span>
+  </div>
+</form>
+{% endblock %}
