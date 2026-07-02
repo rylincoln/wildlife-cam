@@ -7,7 +7,9 @@
 #
 # Automates: install/upgrade cloudflared; connect the tunnel as a boot daemon
 # from your dashboard token; set config.yaml (remote.base_url, livestream.base_path);
-# mint the share secret; regenerate go2rtc.yaml; restart the gallery + stream services.
+# mint the share secret; regenerate go2rtc.yaml; restart go2rtc (the stream service).
+#
+# Note: re-running rotates the share secret and invalidates previously-shared links.
 #
 # Usage:
 #   HOST=cam.rlblais.org CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
@@ -43,7 +45,8 @@ if [[ -z "${CF_TUNNEL_TOKEN:-}" ]]; then
   echo "Create a tunnel in the Cloudflare dashboard (Zero Trust -> Networks -> Tunnels),"
   echo "copy its connector token, then re-run: CF_TUNNEL_TOKEN=... ./scripts/setup_remote.sh"
 else
-  run sudo cloudflared service install "$CF_TUNNEL_TOKEN"
+  echo "+ sudo cloudflared service install <token redacted>"
+  [[ "$DRY_RUN" == "1" ]] || sudo cloudflared service install "$CF_TUNNEL_TOKEN"
 fi
 
 # 3. Wildlife config: public URL + go2rtc sub-path (comment-preserving write).
@@ -64,7 +67,6 @@ run "$VENV/wildlife-share-secret" "$CONFIG"
 
 # 5. Regenerate go2rtc.yaml (adds api.base_path) + restart services.
 run "$VENV/wildlife-stream-config" "$CONFIG" go2rtc.yaml
-run sudo launchctl kickstart -k system/com.wildlife.gallery || true
 run sudo launchctl kickstart -k system/com.wildlife.stream || true
 
 # 6. Finish in the Cloudflare dashboard / on the cameras.
