@@ -19,7 +19,7 @@
   EDIT BEFORE INSTALLING
   =========================================================================
   The absolute paths below assume the deploy user is "ry" and the repo lives
-  at /Users/ry/repos/wildlifedetection. If your username or repo location
+  at /Users/ry/repos/wildlife-cam. If your username or repo location
   differs, update EVERY path below (ProgramArguments, WorkingDirectory,
   StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
   EnvironmentVariables) to match your machine.
@@ -35,7 +35,7 @@
   INSTALL
   =========================================================================
     # 0. Generate go2rtc.yaml from your config.yaml first:
-    cd /Users/ry/repos/wildlifedetection && .venv/bin/wildlife-stream-config
+    cd /Users/ry/repos/wildlife-cam && .venv/bin/wildlife-stream-config
 
     # 1. Copy into the system-wide LaunchDaemons directory:
     sudo cp launchd/com.wildlife.stream.plist /Library/LaunchDaemons/
@@ -96,12 +96,12 @@
     <array>
         <string>/opt/homebrew/bin/go2rtc</string>
         <string>-config</string>
-        <string>/Users/ry/repos/wildlifedetection/go2rtc.yaml</string>
+        <string>/Users/ry/repos/wildlife-cam/go2rtc.yaml</string>
     </array>
 
     <!-- cwd so relative paths resolve against the repo. -->
     <key>WorkingDirectory</key>
-    <string>/Users/ry/repos/wildlifedetection</string>
+    <string>/Users/ry/repos/wildlife-cam</string>
 
     <!-- Start at boot / on load. -->
     <key>RunAtLoad</key>
@@ -129,7 +129,7 @@
     <dict>
         <!-- venv + Homebrew (Apple Silicon) on PATH. -->
         <key>PATH</key>
-        <string>/Users/ry/repos/wildlifedetection/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- HOME so "~" resolves to the deploy user. -->
         <key>HOME</key>
         <string>/Users/ry</string>

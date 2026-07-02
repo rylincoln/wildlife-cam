@@ -119,10 +119,15 @@ class ReolinkEventSource(_QueueBackedEventSource):
         """Connect, poll detection state, and reconnect with backoff until stopped."""
         backoff = _INITIAL_BACKOFF_S
         attempt = 0
-        # Alternate connection port across reconnects: the configured ONVIF port
-        # first (per the project's verified API), then the library default
-        # (``None`` -> reolink-aio auto-selects the HTTP/HTTPS API port).
-        ports = (self.camera.onvif_port, None)
+        # Alternate connection port across reconnects. Try the library default
+        # (``None`` -> reolink-aio auto-selects the HTTP/HTTPS API port, which on
+        # typical Reolink firmware is HTTP:80) FIRST -- it is the fast, reliable
+        # path -- then fall back to the explicitly configured ONVIF port for
+        # setups whose HTTP API lives on a non-standard port. Ordering the ONVIF
+        # port first can send reolink-aio down an HTTPS/443 probe that stalls for
+        # up to ~90s on cameras with 443 closed (observed on the E1-class units
+        # this project targets), delaying the first post-boot connect.
+        ports = (None, self.camera.onvif_port)
 
         while not self._stopping:
             host = None

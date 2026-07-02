@@ -13,7 +13,7 @@
   EDIT BEFORE INSTALLING
   -------------------------------------------------------------------------
   The absolute paths below assume the deploy user is "ry" and the repo lives
-  at /Users/ry/repos/wildlifedetection. If your username or repo location
+  at /Users/ry/repos/wildlife-cam. If your username or repo location
   differs, update EVERY path below (ProgramArguments, WorkingDirectory,
   StandardOutPath, StandardErrorPath, UserName, and PATH/HOME in
   EnvironmentVariables) to match your machine.
@@ -71,12 +71,12 @@
     <!-- The detection worker entry point installed into the venv. -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ry/repos/wildlifedetection/.venv/bin/wildlife-worker</string>
+        <string>/Users/ry/repos/wildlife-cam/.venv/bin/wildlife-worker</string>
     </array>
 
     <!-- cwd so relative paths (config.yaml, models/) resolve against the repo. -->
     <key>WorkingDirectory</key>
-    <string>/Users/ry/repos/wildlifedetection</string>
+    <string>/Users/ry/repos/wildlife-cam</string>
 
     <!-- Start at boot / on load. -->
     <key>RunAtLoad</key>
@@ -102,7 +102,7 @@
     <dict>
         <!-- Homebrew (Apple Silicon) on PATH so FFmpeg/ffprobe are found for RTSP/HEVC. -->
         <key>PATH</key>
-        <string>/Users/ry/repos/wildlifedetection/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/ry/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <!-- HOME so "~" in config (captures_dir, db_path) expands to the deploy user. -->
         <key>HOME</key>
         <string>/Users/ry</string>
@@ -110,7 +110,7 @@
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <!-- Optional: point at an explicit config file if not using ./config.yaml. -->
-        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/ry/repos/wildlifedetection/config.yaml</string> -->
+        <!-- <key>WILDLIFE_CONFIG</key><string>/Users/ry/repos/wildlife-cam/config.yaml</string> -->
     </dict>
 </dict>
 </plist>

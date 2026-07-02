@@ -106,7 +106,7 @@ pass against your real cameras.
 ```bash
 python scripts/test_rtsp.py        # hard gate 1
 python scripts/test_events.py      # hard gate 2
-python scripts/test_detect.py path/to/still.jpg
+python scripts/test_detect.py --image path/to/still.jpg
 pytest
 ```
 
