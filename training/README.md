@@ -10,9 +10,9 @@ and `gate.py` filters by `detection.animal_classes`, which must match).
 ## The pipeline
 
 ```
-   public datasets ─┐
-                     ├─▶ convert_lila.py ─┐
- your captures ─▶ autolabel.py (SpeciesNet) ─┴─▶ pool of images + YOLO .txt
+ public datasets ─▶ download_lila.py (target subset) ─▶ convert_lila.py ─┐
+                                                                          ├─▶ pool of
+ your captures ──────────▶ autolabel.py (SpeciesNet) ────────────────────┘   images + .txt
                      │
                      ▼
             prepare_dataset.py  (burst-safe train/val split + data.yaml)
@@ -37,30 +37,44 @@ pip install -e '.[autolabel]'  # speciesnet (auto-labeling; bundles MegaDetector
 
 ## Phase 0 — before you have your own captures (bootstrap on public data)
 
-The best directly-boxed, commercially-usable sets for our carnivores/ungulates:
+The public archives are huge (Caltech 105 GB, Idaho ~1.45 TB) and mostly empty
+frames, so `download_lila.py` fetches only a **target-species subset** from each
+dataset's per-image URL. Good starting sets:
 
-| Dataset | Species | Get it |
+| Dataset | Adds | Size (full → subset) |
 |---|---|---|
-| **Caltech Camera Traps** | cougar, bobcat, coyote, fox, deer, raccoon, skunk | [lila.science/datasets/caltech-camera-traps](https://lila.science/datasets/caltech-camera-traps) (`cct_images.tar.gz`, `caltech_bboxes_20200316.json`) |
-| **ENA24** | black bear, deer, turkey, coyote, fox, skunk | [lila.science/datasets/ena24detection](https://lila.science/datasets/ena24detection) (100% boxed, ~3.6 GB) |
+| **ENA24** | black bear, deer, turkey, coyote, fox, skunk, raccoon, bobcat, squirrel | 3.6 GB (small — grab the whole zip) |
+| **Caltech Camera Traps** | **mountain_lion**, bobcat, coyote, deer, raccoon, skunk, rabbit, bird | 105 GB → ~14 GB (38k boxed target imgs) |
+| **Idaho Camera Traps** | **elk, moose, pronghorn, bighorn**, more cougar/bear/coyote | 1.45 TB → ~6 GB (cap 4k/class, MD-boxed) |
 
-For elk/moose/pronghorn/bighorn, add **Idaho Camera Traps** (image-level → use its
-[LILA MegaDetector-results JSON](https://lila.science/megadetector-results-for-camera-trap-datasets/)
-for boxes; note its **non-commercial** license) and fill rare species from
-**iNaturalist via GBIF** (filter to CC0/CC-BY + region).
+Idaho/Caltech-image-level boxes come from the
+[LILA MegaDetector-results JSON](https://lila.science/megadetector-results-for-camera-trap-datasets/);
+Idaho is **non-commercial**. Fill rare species from **iNaturalist via GBIF**
+(filter CC0/CC-BY + region).
 
 ```bash
-# ENA24 (native species boxes):
-python training/convert_lila.py --images ~/data/ena24/images \
-    --cct ~/data/ena24/ena24.json --out ~/wildlife/labeled/ena24 --tiers 12
+# ENA24 — small; just download the zip + json, then convert (native boxes):
+python training/convert_lila.py --images ~/wildlife/data/ena24/images \
+    --cct ~/wildlife/data/ena24/ena24.json --out ~/wildlife/labeled/ena24 --tiers 12
 
-# Caltech (image-level species + MegaDetector boxes):
-python training/convert_lila.py --images ~/data/caltech/cct_images \
-    --cct ~/data/caltech/caltech_bboxes_20200316.json \
-    --md-results ~/data/caltech/caltech_camera_traps_mdv5a.0.0_results.json \
-    --out ~/wildlife/labeled/caltech --tiers 12
+# Caltech — download the boxed target subset, then convert:
+python training/download_lila.py --metadata ~/wildlife/data/caltech/caltech_bboxes.json \
+    --base-url https://storage.googleapis.com/public-datasets-lila/caltech-unzipped/cct_images \
+    --out ~/wildlife/data/caltech/images --tiers 12 --boxed-only
+python training/convert_lila.py --images ~/wildlife/data/caltech/images \
+    --cct ~/wildlife/data/caltech/caltech_bboxes.json --out ~/wildlife/labeled/caltech --tiers 12
 
-# Split (burst-safe) into a trainable dataset:
+# Idaho — no native boxes: filter by MegaDetector-results, cap per class:
+python training/download_lila.py --metadata ~/wildlife/data/idaho/idaho-camera-traps.json \
+    --base-url https://storage.googleapis.com/public-datasets-lila/idaho-camera-traps/public \
+    --md-results ~/wildlife/data/idaho/idaho-camera-traps_mdv5a.0.0_results.json \
+    --out ~/wildlife/data/idaho/images --tiers 12 --max-per-class 4000
+python training/convert_lila.py --images ~/wildlife/data/idaho/images \
+    --cct ~/wildlife/data/idaho/idaho-camera-traps.json \
+    --md-results ~/wildlife/data/idaho/idaho-camera-traps_mdv5a.0.0_results.json \
+    --out ~/wildlife/labeled/idaho --tiers 12
+
+# Merge all pools into one burst-safe split (the class manifest keeps ids consistent):
 python training/prepare_dataset.py --pool ~/wildlife/labeled --out ~/wildlife/dataset --tiers 12
 python training/train.py --data ~/wildlife/dataset/data.yaml --model yolo11s.pt
 ```
@@ -120,6 +134,7 @@ CPU and off the GPU shaders go2rtc wants.
 | Script | Does |
 |---|---|
 | `species.py` | canonical class taxonomy (tiers + support); emits `data.yaml` names & `animal_classes` |
+| `download_lila.py` | fetch a target-species subset of a LILA dataset (skips the huge full archive) |
 | `convert_lila.py` | COCO-Camera-Traps + LILA MD-results JSON → YOLO label pool |
 | `autolabel.py` | SpeciesNet `predictions.json` → YOLO labels + `review.csv` |
 | `prepare_dataset.py` | burst-safe train/val split + `data.yaml` |

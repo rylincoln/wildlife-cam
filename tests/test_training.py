@@ -17,6 +17,7 @@ sys.path.insert(0, str(_TRAINING))
 
 import autolabel  # noqa: E402
 import convert_lila  # noqa: E402
+import download_lila  # noqa: E402
 import prepare_dataset  # noqa: E402
 import species  # noqa: E402
 
@@ -190,6 +191,42 @@ def test_convert_skips_missing_source(tmp_path: Path) -> None:
     assert "skip_missing: 1" in r.stdout
     assert (out / "S" / "f1.txt").exists()          # present image labeled
     assert not (out / "S" / "gone.txt").exists()    # missing source -> no broken symlink/label
+
+
+# --------------------------------------------------------------------------- #
+# download_lila (subset selection)
+# --------------------------------------------------------------------------- #
+def test_download_target_file_names() -> None:
+    active = set(species.training_classes(("1", "2")))
+    meta = {
+        "categories": [{"id": 0, "name": "empty"}, {"id": 1, "name": "Coyote"},
+                       {"id": 2, "name": "Dog"}, {"id": 3, "name": "Mule Deer"}],
+        "images": [{"id": i, "file_name": f"{i}.jpg"} for i in ("a", "b", "c", "d", "e")],
+        "annotations": [
+            {"image_id": "a", "category_id": 1, "bbox": [0, 0, 1, 1]},  # coyote (boxed) -> keep
+            {"image_id": "b", "category_id": 2},                        # dog -> unmapped, drop
+            {"image_id": "c", "category_id": 0},                        # empty -> no target, drop
+            {"image_id": "d", "category_id": 3},                        # mule deer, no box
+            {"image_id": "e", "category_id": 3}, {"image_id": "e", "category_id": 2},  # deer+dog -> drop
+        ],
+    }
+    # boxed_only keeps only the one with a bbox
+    assert download_lila.target_file_names(meta, active, boxed_only=True, max_per_class=None) == ["a.jpg"]
+    # without boxed_only: a (coyote) and d (deer); b/c/e excluded
+    assert set(download_lila.target_file_names(meta, active, boxed_only=False, max_per_class=None)) == {"a.jpg", "d.jpg"}
+    # MD filter restricts to boxed-by-MD images
+    assert download_lila.target_file_names(
+        meta, active, boxed_only=False, max_per_class=None, md_files={"d.jpg"}) == ["d.jpg"]
+
+
+def test_md_animal_files() -> None:
+    md = {"images": [
+        {"file": "x.jpg", "detections": [{"category": "1", "conf": 0.9}]},   # animal -> keep
+        {"file": "y.jpg", "detections": [{"category": "3", "conf": 0.9}]},   # vehicle -> drop
+        {"file": "z.jpg", "detections": [{"category": "1", "conf": 0.05}]},  # low conf -> drop
+        {"file": "h.jpg", "detections": [{"category": "2", "conf": 0.5}]},   # human -> keep
+    ]}
+    assert download_lila.md_animal_files(md, 0.2) == {"x.jpg", "h.jpg"}
 
 
 def test_prepare_group_by_image_splits_flat_pool(tmp_path: Path) -> None:
