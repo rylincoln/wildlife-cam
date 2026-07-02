@@ -373,3 +373,25 @@ def test_migration_adds_columns_to_old_db(tmp_path: Path) -> None:
         store.init_schema()  # idempotent second run — no error
     finally:
         store.close()
+
+
+def test_safe_unlink_removes_and_guards(tmp_path: Path) -> None:
+    from wildlife.store import _safe_unlink
+
+    captures = tmp_path / "captures"
+    (captures / "2020" / "01" / "01").mkdir(parents=True)
+    f = captures / "2020" / "01" / "01" / "x.jpg"
+    f.write_bytes(b"hello")
+
+    # Deletes a real file, reports bytes freed.
+    deleted, size = _safe_unlink(captures, "2020/01/01/x.jpg")
+    assert deleted is True and size == 5 and not f.exists()
+
+    # Missing file is tolerated (idempotent), not an error.
+    assert _safe_unlink(captures, "2020/01/01/x.jpg") == (False, 0)
+
+    # Path escaping captures_dir is refused.
+    outside = tmp_path / "secret.txt"
+    outside.write_text("nope")
+    assert _safe_unlink(captures, "../secret.txt") == (False, 0)
+    assert outside.exists()

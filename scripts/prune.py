@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta
@@ -43,6 +42,7 @@ def _bootstrap_src_path() -> None:
 _bootstrap_src_path()
 
 from wildlife.config import load_config  # noqa: E402
+from wildlife.store import _prune_empty_dirs, _safe_unlink  # noqa: E402
 
 logger = logging.getLogger("prune")
 
@@ -78,58 +78,6 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='captures'"
     ).fetchone()
     return row is not None
-
-
-def _safe_unlink(captures_dir: Path, rel: str | None) -> tuple[bool, int]:
-    """Delete ``captures_dir/rel`` if present and safely inside ``captures_dir``.
-
-    Returns ``(deleted, bytes_freed)``. Missing files count as not-deleted with
-    zero bytes (keeps the operation idempotent). Paths that resolve outside the
-    captures tree are refused as a safety check.
-    """
-    if not rel:
-        return (False, 0)
-
-    target = captures_dir / rel
-    root = captures_dir.resolve()
-    try:
-        resolved = target.resolve()
-    except OSError:
-        return (False, 0)
-
-    if root != resolved and root not in resolved.parents:
-        logger.warning("Refusing to delete path outside captures_dir: %s", target)
-        return (False, 0)
-
-    if not resolved.exists():
-        return (False, 0)
-
-    try:
-        size = resolved.stat().st_size
-        resolved.unlink()
-        return (True, size)
-    except OSError as exc:
-        logger.warning("Could not delete %s: %s", resolved, exc)
-        return (False, 0)
-
-
-def _prune_empty_dirs(root: Path) -> int:
-    """Remove now-empty subdirectories under ``root`` (bottom-up). Returns count."""
-    if not root.is_dir():
-        return 0
-    removed = 0
-    for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
-        directory = Path(dirpath)
-        if directory == root:
-            continue
-        try:
-            if not any(directory.iterdir()):
-                directory.rmdir()
-                removed += 1
-        except OSError:
-            # Non-empty or vanished concurrently; leave it be.
-            pass
-    return removed
 
 
 def main() -> int:
