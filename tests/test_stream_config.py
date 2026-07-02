@@ -203,3 +203,27 @@ def test_write_go2rtc_config_default_path(tmp_path: Path) -> None:
         "south_trail_main",
         "south_trail_sub",
     }
+
+
+def test_build_go2rtc_config_emits_base_path_when_set() -> None:
+    from wildlife.config import LivestreamConfig
+    from wildlife.stream.config_gen import build_go2rtc_config
+    from tests.test_gallery_live import _build_config
+    import tempfile, pathlib
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = _build_config(pathlib.Path(d), livestream=LivestreamConfig(enabled=True, base_path="/go2rtc"))
+        data = build_go2rtc_config(cfg)
+        assert data["api"]["base_path"] == "/go2rtc"
+
+
+def test_build_go2rtc_config_omits_base_path_when_empty() -> None:
+    from wildlife.config import LivestreamConfig
+    from wildlife.stream.config_gen import build_go2rtc_config
+    from tests.test_gallery_live import _build_config
+    import tempfile, pathlib
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = _build_config(pathlib.Path(d), livestream=LivestreamConfig(enabled=True))
+        data = build_go2rtc_config(cfg)
+        assert "base_path" not in data["api"]

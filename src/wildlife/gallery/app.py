@@ -249,36 +249,41 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     # ----------------------------------------------------------------------- #
     # Livestream (go2rtc) helpers + routes
     # ----------------------------------------------------------------------- #
-    def _live_base() -> str:
-        """Resolve the browser-reachable go2rtc base URL for iframe embeds.
+    def _live_base(remote: bool) -> str:
+        """Resolve the browser-reachable go2rtc base for iframe embeds.
 
-        Prefers an explicit ``livestream.go2rtc_url`` override; otherwise derives
-        it from the request's host (port stripped) plus the configured
-        ``go2rtc_port`` so the same gallery works from any LAN client.
+        Over the tunnel (``remote``) go2rtc is reverse-routed at a same-origin
+        sub-path (``livestream.base_path``, e.g. ``/go2rtc``) and served under
+        ``api.base_path``, so we embed a relative URL -- no host, no port, https by
+        inheritance. On the LAN we hit go2rtc directly on its api port (honoring an
+        explicit ``go2rtc_url`` override), with the same sub-path appended.
         """
         ls = get_config().livestream
+        if remote:
+            return ls.base_path
         if ls.go2rtc_url:
-            return ls.go2rtc_url.rstrip("/")
+            return ls.go2rtc_url.rstrip("/") + ls.base_path
         host = request.host.split(":")[0]
-        return f"http://{host}:{ls.go2rtc_port}"
+        return f"http://{host}:{ls.go2rtc_port}{ls.base_path}"
 
     def _stream_iframe_src(base: str, stream_name: str, mode: str) -> str:
         """Build the go2rtc ``stream.html`` embed URL for a single stream name."""
         return f"{base}/stream.html?src={stream_name}&mode={mode}"
 
-    def _camera_live(base: str, camera) -> dict:
-        """Shape a camera into its ``sub``/``main`` absolute iframe URLs.
+    def _camera_live(base: str, camera, *, remote: bool) -> dict:
+        """Shape a camera into its ``sub``/``main`` iframe URLs.
 
-        Stream names follow the frozen go2rtc convention ``<id>_sub`` /
-        ``<id>_main`` so they line up with the generated ``go2rtc.yaml``. The two
-        tiles carry independent player transports (``sub_mode`` / ``main_mode``)
-        because the sub and main streams typically use different codecs.
+        Over the tunnel both tiles are forced to ``mode=mse`` because WebRTC cannot
+        traverse a Cloudflare Tunnel; on the LAN the configured per-tile transports
+        (``sub_mode``/``main_mode``) are kept for best latency.
         """
         ls = get_config().livestream
+        sub_mode = "mse" if remote else ls.sub_mode
+        main_mode = "mse" if remote else ls.main_mode
         return {
             "id": camera.id,
-            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", ls.sub_mode),
-            "main_src": _stream_iframe_src(base, f"{camera.id}_main", ls.main_mode),
+            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", sub_mode),
+            "main_src": _stream_iframe_src(base, f"{camera.id}_main", main_mode),
         }
 
     @app.route("/live")
@@ -288,14 +293,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         ls = cfg.livestream
         if not ls.enabled:
             abort(404)
-        base = _live_base()
-        cameras = [_camera_live(base, cam) for cam in cfg.cameras]
+        remote = _via_tunnel()
+        base = _live_base(remote)
+        cameras = [_camera_live(base, cam, remote=remote) for cam in cfg.cameras]
         return render_template(
-            "live.html",
-            cameras=cameras,
-            default_stream=ls.default_stream,
-            allow_main=ls.allow_main,
-            single=False,
+            "live.html", cameras=cameras, default_stream=ls.default_stream,
+            allow_main=ls.allow_main, single=False, remote=remote,
         )
 
     @app.route("/live/<camera_id>")
@@ -308,14 +311,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         camera = next((c for c in cfg.cameras if c.id == camera_id), None)
         if camera is None:
             abort(404)
-        base = _live_base()
-        cameras = [_camera_live(base, camera)]
+        remote = _via_tunnel()
+        base = _live_base(remote)
+        cameras = [_camera_live(base, camera, remote=remote)]
         return render_template(
-            "live.html",
-            cameras=cameras,
-            default_stream=ls.default_stream,
-            allow_main=ls.allow_main,
-            single=True,
+            "live.html", cameras=cameras, default_stream=ls.default_stream,
+            allow_main=ls.allow_main, single=True, remote=remote,
         )
 
     # ----------------------------------------------------------------------- #
