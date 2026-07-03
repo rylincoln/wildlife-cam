@@ -42,6 +42,7 @@ from flask import (
 
 from wildlife.config import Config, load_config
 from wildlife.store import Store
+from wildlife.remote import capability as _cap
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,52 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
                 logger.exception("Failed to reload %s; keeping previous config", config_path)
         return _cfg_cache["config"]
 
+    _rate_limiter = _cap.RateLimiter()
+
+    def _via_tunnel() -> bool:
+        """True when the request arrived via the local cloudflared connector AND
+        remote access is enabled -- i.e. the shared-secret gate applies. LAN
+        clients (non-loopback remote_addr) and remote-disabled configs are False."""
+        return get_config().remote.enabled and _cap.is_loopback(request.remote_addr)
+
+    @app.before_request
+    def _remote_gate():
+        if not _via_tunnel():
+            return None  # LAN or remote-disabled -> unchanged behavior
+        remote = get_config().remote
+        path = request.path
+        if remote.block_admin and (path == "/admin" or path.startswith("/admin/")):
+            abort(404)  # /admin is never reachable over the tunnel
+        if path.startswith("/static/"):
+            return None  # styling assets carry no data; keep the shared page rendered
+        if not remote.share_secret_hash:
+            logger.warning("remote.enabled but no share_secret_hash set; run wildlife-share-secret")
+            abort(404)  # fail closed
+        ip = request.headers.get("Cf-Connecting-IP") or request.remote_addr
+        if _rate_limiter.blocked(ip):
+            abort(404)  # treat a rate-limited IP exactly like a bad key (no oracle)
+        provided = request.args.get("key")
+        if _cap.secret_ok(remote.share_secret_hash, provided):
+            _rate_limiter.reset(ip)
+            g._set_share_cookie = provided  # emitted in after_request
+            return None
+        if _cap.secret_ok(remote.share_secret_hash, request.cookies.get(_cap.COOKIE_NAME)):
+            return None
+        if provided is not None:
+            _rate_limiter.record_fail(ip)
+        abort(404)
+
+    @app.after_request
+    def _remote_headers(resp):
+        if getattr(g, "_set_share_cookie", None):
+            resp.set_cookie(
+                _cap.COOKIE_NAME, g._set_share_cookie,
+                max_age=60 * 60 * 24 * 90, secure=True, httponly=True, samesite="Lax",
+            )
+        if get_config().remote.enabled:
+            resp.headers["Referrer-Policy"] = "no-referrer"
+        return resp
+
     def _new_store() -> Store:
         return Store(
             db_path=storage.db_path,
@@ -202,36 +249,41 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     # ----------------------------------------------------------------------- #
     # Livestream (go2rtc) helpers + routes
     # ----------------------------------------------------------------------- #
-    def _live_base() -> str:
-        """Resolve the browser-reachable go2rtc base URL for iframe embeds.
+    def _live_base(remote: bool) -> str:
+        """Resolve the browser-reachable go2rtc base for iframe embeds.
 
-        Prefers an explicit ``livestream.go2rtc_url`` override; otherwise derives
-        it from the request's host (port stripped) plus the configured
-        ``go2rtc_port`` so the same gallery works from any LAN client.
+        Over the tunnel (``remote``) go2rtc is reverse-routed at a same-origin
+        sub-path (``livestream.base_path``, e.g. ``/go2rtc``) and served under
+        ``api.base_path``, so we embed a relative URL -- no host, no port, https by
+        inheritance. On the LAN we hit go2rtc directly on its api port (honoring an
+        explicit ``go2rtc_url`` override), with the same sub-path appended.
         """
         ls = get_config().livestream
+        if remote:
+            return ls.base_path
         if ls.go2rtc_url:
-            return ls.go2rtc_url.rstrip("/")
+            return ls.go2rtc_url.rstrip("/") + ls.base_path
         host = request.host.split(":")[0]
-        return f"http://{host}:{ls.go2rtc_port}"
+        return f"http://{host}:{ls.go2rtc_port}{ls.base_path}"
 
     def _stream_iframe_src(base: str, stream_name: str, mode: str) -> str:
         """Build the go2rtc ``stream.html`` embed URL for a single stream name."""
         return f"{base}/stream.html?src={stream_name}&mode={mode}"
 
-    def _camera_live(base: str, camera) -> dict:
-        """Shape a camera into its ``sub``/``main`` absolute iframe URLs.
+    def _camera_live(base: str, camera, *, remote: bool) -> dict:
+        """Shape a camera into its ``sub``/``main`` iframe URLs.
 
-        Stream names follow the frozen go2rtc convention ``<id>_sub`` /
-        ``<id>_main`` so they line up with the generated ``go2rtc.yaml``. The two
-        tiles carry independent player transports (``sub_mode`` / ``main_mode``)
-        because the sub and main streams typically use different codecs.
+        Over the tunnel both tiles are forced to ``mode=mse`` because WebRTC cannot
+        traverse a Cloudflare Tunnel; on the LAN the configured per-tile transports
+        (``sub_mode``/``main_mode``) are kept for best latency.
         """
         ls = get_config().livestream
+        sub_mode = "mse" if remote else ls.sub_mode
+        main_mode = "mse" if remote else ls.main_mode
         return {
             "id": camera.id,
-            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", ls.sub_mode),
-            "main_src": _stream_iframe_src(base, f"{camera.id}_main", ls.main_mode),
+            "sub_src": _stream_iframe_src(base, f"{camera.id}_sub", sub_mode),
+            "main_src": _stream_iframe_src(base, f"{camera.id}_main", main_mode),
         }
 
     @app.route("/live")
@@ -241,14 +293,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         ls = cfg.livestream
         if not ls.enabled:
             abort(404)
-        base = _live_base()
-        cameras = [_camera_live(base, cam) for cam in cfg.cameras]
+        remote = _via_tunnel()
+        base = _live_base(remote)
+        cameras = [_camera_live(base, cam, remote=remote) for cam in cfg.cameras]
         return render_template(
-            "live.html",
-            cameras=cameras,
-            default_stream=ls.default_stream,
-            allow_main=ls.allow_main,
-            single=False,
+            "live.html", cameras=cameras, default_stream=ls.default_stream,
+            allow_main=ls.allow_main, single=False, remote=remote,
         )
 
     @app.route("/live/<camera_id>")
@@ -261,14 +311,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         camera = next((c for c in cfg.cameras if c.id == camera_id), None)
         if camera is None:
             abort(404)
-        base = _live_base()
-        cameras = [_camera_live(base, camera)]
+        remote = _via_tunnel()
+        base = _live_base(remote)
+        cameras = [_camera_live(base, camera, remote=remote)]
         return render_template(
-            "live.html",
-            cameras=cameras,
-            default_stream=ls.default_stream,
-            allow_main=ls.allow_main,
-            single=True,
+            "live.html", cameras=cameras, default_stream=ls.default_stream,
+            allow_main=ls.allow_main, single=True, remote=remote,
         )
 
     # ----------------------------------------------------------------------- #

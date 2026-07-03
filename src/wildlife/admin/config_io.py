@@ -55,6 +55,7 @@ __all__ = [
     "update_section",
     "update_sections",
     "set_admin_password",
+    "set_remote_secret",
 ]
 
 #: Directory (relative to the config file) that holds timestamped backups.
@@ -441,5 +442,21 @@ def set_admin_password(config_path: str | Path, password_hash: str) -> Config:
         admin = _ensure_map(doc, "admin")
         admin["enabled"] = True
         admin["password_hash"] = password_hash
+
+    return write(config_path, _mutate, trigger_reload=False)
+
+
+def set_remote_secret(config_path: str | Path, secret_hash: str) -> Config:
+    """Persist a Werkzeug hash of the remote share secret under ``remote.share_secret_hash``.
+
+    Also enables remote access (``remote.enabled = True``). Does not trigger a
+    reload -- the gallery reads ``remote`` live per request; the worker/go2rtc
+    don't consume it.
+    """
+
+    def _mutate(doc) -> None:
+        remote = _ensure_map(doc, "remote")
+        remote["enabled"] = True
+        remote["share_secret_hash"] = secret_hash
 
     return write(config_path, _mutate, trigger_reload=False)
