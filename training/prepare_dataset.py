@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import random
 import re
 import sys
 from collections import Counter, defaultdict
@@ -111,6 +112,10 @@ def main() -> int:
     parser.add_argument("--out", required=True, help="Output dataset directory.")
     parser.add_argument("--labels", default=None, help="Optional separate labels dir (else sibling .txt).")
     parser.add_argument("--val-frac", type=float, default=0.15, help="Fraction of GROUPS held out for val.")
+    parser.add_argument("--max-per-class", type=int, default=None,
+                        help="Cap labeled instances per class per split (stratified balancing across "
+                             "sources). Prefer this over Ultralytics --fraction, which takes the first-N "
+                             "sorted files and would train on just one source.")
     parser.add_argument("--seed", type=int, default=1, help="Split seed (deterministic).")
     parser.add_argument("--tiers", default="1", help="Species tiers for names, e.g. '1' or '12'.")
     parser.add_argument("--no-support", action="store_true", help="Exclude person/black_bear/bird classes.")
@@ -178,41 +183,59 @@ def main() -> int:
     backgrounds = Counter()
     bad_class_ids = 0
 
-    for group, imgs in groups.items():
+    # Shuffle group order (seeded) so a --max-per-class cap fills each class from a
+    # MIX of sources, not just whichever pool sorts first (e.g. caltech). Split
+    # assignment is by group hash, so this doesn't change which split a group lands in.
+    group_items = list(groups.items())
+    random.Random(args.seed).shuffle(group_items)
+
+    skipped_capped = 0
+    for group, imgs in group_items:
         split = _assign_split(group, args.val_frac, args.seed)
         for img in imgs:
             rel = img.relative_to(pool)
+            label = _find_label(img, pool, labels_root)
+
+            # Parse+validate the label FIRST (needed for the per-class cap): drop
+            # malformed/out-of-range lines rather than crashing or writing garbage.
+            valid: list[str] = []
+            img_classes: list[str] = []
+            if label is not None:
+                for line in label.read_text().splitlines():
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    try:
+                        cid = int(float(parts[0]))
+                    except ValueError:
+                        bad_class_ids += 1
+                        continue
+                    if 0 <= cid < n_classes:
+                        valid.append(line)
+                        img_classes.append(classes[cid])
+                    else:
+                        bad_class_ids += 1
+
+            # Stratified cap: skip a labeled image only when EVERY class it contains
+            # is already at the cap for this split (so rare classes are never starved).
+            if args.max_per_class and img_classes and all(
+                class_counts[split][c] >= args.max_per_class for c in img_classes
+            ):
+                skipped_capped += 1
+                continue
+
             img_dst = out / "images" / split / rel
             _materialize(img, img_dst, args.copy)
             split_counts[split] += 1
 
-            label = _find_label(img, pool, labels_root)
-            if label is None:
+            if not valid:
                 backgrounds[split] += 1
                 continue
-            # Validate label lines BEFORE writing: drop malformed/out-of-range lines
-            # (and count them) rather than materializing a corrupt label or crashing.
-            valid: list[str] = []
-            for line in label.read_text().splitlines():
-                parts = line.split()
-                if not parts:
-                    continue
-                try:
-                    cid = int(float(parts[0]))
-                except ValueError:
-                    bad_class_ids += 1
-                    continue
-                if 0 <= cid < n_classes:
-                    class_counts[split][classes[cid]] += 1
-                    valid.append(line)
-                else:
-                    bad_class_ids += 1
-            if valid:
-                lbl_dst = out / "labels" / split / rel.with_suffix(".txt")
-                lbl_dst.parent.mkdir(parents=True, exist_ok=True)
-                lbl_dst.write_text("\n".join(valid) + "\n")
-            else:
-                backgrounds[split] += 1
+            for c in img_classes:
+                class_counts[split][c] += 1
+            lbl_dst = out / "labels" / split / rel.with_suffix(".txt")
+            lbl_dst.parent.mkdir(parents=True, exist_ok=True)
+            lbl_dst.write_text("\n".join(valid) + "\n")
 
     # A training set needs both splits populated. A flat pool collapses to one
     # group (all images to one side), so fail loudly rather than emit a broken set.

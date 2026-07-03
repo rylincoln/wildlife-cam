@@ -40,3 +40,6 @@ logs/
 
 # test-mode workspace (scripts/run_demo.sh)
 /.demo/
+
+# Ultralytics training outputs (checkpoints, weights, plots)
+runs/
