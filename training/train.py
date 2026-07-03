@@ -60,6 +60,13 @@ def main() -> int:
     p.add_argument("--lr", type=float, default=0.001, help="Stage-2 lr0 (with optimizer=AdamW).")
     p.add_argument("--patience", type=int, default=15, help="Early-stopping patience.")
     p.add_argument("--mosaic", type=float, default=0.5, help="Mosaic aug prob (lower for small datasets).")
+    p.add_argument("--fraction", type=float, default=1.0, help="Fraction of the train set to use (quick runs).")
+    p.add_argument("--workers", type=int, default=8, help="Dataloader workers (MPS may force 0).")
+    p.add_argument("--no-val", action="store_true",
+                   help="Skip per-epoch validation (big MPS speedup); one final val still runs.")
+    p.add_argument("--cache", choices=["none", "ram", "disk"], default="none",
+                   help="Cache decoded images (disk/ram) so epochs after the first skip JPEG "
+                        "decode -- the big win when MPS training is data-loading bound.")
     p.add_argument("--single-stage", action="store_true", help="Skip the frozen stage; one unfrozen run.")
     p.add_argument("--project", default="runs/wildlife", help="Output root for runs.")
     p.add_argument("--name", default="sw_co", help="Run name.")
@@ -78,7 +85,9 @@ def main() -> int:
 
     common = dict(
         data=str(data), imgsz=args.imgsz, batch=args.batch, device=args.device,
-        patience=args.patience, mosaic=args.mosaic, project=args.project,
+        patience=args.patience, mosaic=args.mosaic, project=args.project, fraction=args.fraction,
+        workers=args.workers, val=not args.no_val,
+        cache={"none": False, "ram": True, "disk": "disk"}[args.cache],
     )
 
     if not args.single_stage and args.epochs_stage1 > 0:
@@ -114,21 +123,29 @@ def main() -> int:
     is_end2end = bool(getattr(getattr(model, "model", None), "end2end", False)) or (
         "yolo26" in Path(args.model).stem.lower()
     )
+    # Deploy hint from the TRAINED model's own class names (not hardcoded tiers),
+    # so detection.animal_classes always matches what the model actually predicts.
+    names = list(model.names.values()) if isinstance(model.names, dict) else list(model.names)
+    animal_classes = species.config_animal_classes(names)
+
     export_kwargs: dict = dict(format="coreml", imgsz=args.imgsz)
     if not is_end2end:
         export_kwargs["nms"] = True
     if args.quantize != "none":
         export_kwargs["quantize"] = int(args.quantize)
     print(f"\n[export] Core ML: {export_kwargs}")
-    mlpackage = model.export(**export_kwargs)
+    try:
+        deploy_path = model.export(**export_kwargs)
+        print(f"\nExported Core ML model: {deploy_path}")
+    except Exception as exc:  # noqa: BLE001 - export is best-effort; the .pt still deploys
+        deploy_path = best
+        print(f"\nCore ML export failed ({type(exc).__name__}: {exc}).")
+        print("This env's torch is likely too new for coremltools; deploy the .pt on MPS "
+              "instead (detect.py loads it directly via device=mps -- no code change).")
 
-    # Deploy hint from the TRAINED model's own class names (not hardcoded tiers),
-    # so detection.animal_classes always matches what the model actually predicts.
-    names = list(model.names.values()) if isinstance(model.names, dict) else list(model.names)
-    print(f"\nExported Core ML model: {mlpackage}")
-    print("Deploy: copy it into models/, set detection.model_path to it, and set")
-    print("detection.animal_classes to the trained model's classes:\n")
-    print(species.config_animal_classes(names))
+    print(f"\nDeploy: set detection.model_path to:\n  {deploy_path}")
+    print("and detection.animal_classes to the trained model's classes:\n")
+    print(animal_classes)
     return 0
 
 
