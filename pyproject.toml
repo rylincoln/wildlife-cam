@@ -68,6 +68,8 @@ wildlife-stream-config = "wildlife.stream.config_gen:main"
 wildlife-reload = "wildlife.reload_agent:main"
 # Set/replace the admin UI password (writes a hash into config.yaml).
 wildlife-admin-password = "wildlife.admin.passwd:main"
+# Mint/rotate the remote (Cloudflare Tunnel) share-link secret.
+wildlife-share-secret = "wildlife.remote.share_secret:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wildlife"]

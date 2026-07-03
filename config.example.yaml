@@ -80,3 +80,10 @@ livestream: # optional on-demand live view via a companion go2rtc binary (detect
   # rejects but WebRTC decodes -- hence the split.
   main_mode: "webrtc,mse" # HEVC 4K main -> MSE
   sub_mode: "webrtc" # H264 High sub -> WebRTC
+  base_path: "" # set "/go2rtc" to serve go2rtc under a sub-path for Cloudflare-Tunnel remote access
+
+remote: # optional Cloudflare-Tunnel remote access (see README "Remote access")
+  enabled: false # set by `wildlife-share-secret`; gates tunnel traffic with a shared-secret link
+  base_url: "" # your public URL, e.g. "https://cam.rlblais.org" (used to build the share link)
+  share_secret_hash: null # Werkzeug hash of the shared secret; managed by `wildlife-share-secret`
+  block_admin: true # refuse /admin over the tunnel (config editing stays LAN-only)
