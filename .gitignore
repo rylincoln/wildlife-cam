@@ -15,6 +15,7 @@ venv/
 models/*.pt
 models/*.mlpackage
 models/*.onnx
+weights/
 
 # Python
 __pycache__/
