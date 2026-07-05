@@ -67,6 +67,9 @@ def main() -> int:
     p.add_argument("--cache", choices=["none", "ram", "disk"], default="none",
                    help="Cache decoded images (disk/ram) so epochs after the first skip JPEG "
                         "decode -- the big win when MPS training is data-loading bound.")
+    p.add_argument("--hours", type=float, default=None,
+                   help="Max training time (hours); overrides epochs. Ultralytics trains as many "
+                        "epochs as fit and picks the val-best checkpoint. Best for a bounded overnight run.")
     p.add_argument("--single-stage", action="store_true", help="Skip the frozen stage; one unfrozen run.")
     p.add_argument("--project", default="runs/wildlife", help="Output root for runs.")
     p.add_argument("--name", default="sw_co", help="Run name.")
@@ -89,6 +92,8 @@ def main() -> int:
         workers=args.workers, val=not args.no_val,
         cache={"none": False, "ram": True, "disk": "disk"}[args.cache],
     )
+    if args.hours:
+        common["time"] = args.hours  # Ultralytics: time-bound overrides epochs
 
     if not args.single_stage and args.epochs_stage1 > 0:
         print(f"[stage 1] freeze={args.freeze}, {args.epochs_stage1} epochs")
