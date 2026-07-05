@@ -59,7 +59,8 @@ def md_animal_files(md: dict, conf_thresh: float) -> set[str]:
 
 
 def target_file_names(meta: dict, active: set[str], *, boxed_only: bool,
-                      max_per_class: int | None, md_files: set[str] | None = None) -> list[str]:
+                      max_per_class: int | None, md_files: set[str] | None = None,
+                      only_classes: set[str] | None = None) -> list[str]:
     """Return the file_names to download: images convert_lila will keep with a target.
 
     Only images where every non-empty annotation maps to an active class (so the
@@ -82,6 +83,8 @@ def target_file_names(meta: dict, active: set[str], *, boxed_only: bool,
         species_here = [m for m in mapped if m not in (None, _EMPTY)]
         if not species_here or any(m is None for m in mapped):
             continue  # no target, or an unmapped non-empty animal -> convert would skip it
+        if only_classes is not None and not (set(species_here) & only_classes):
+            continue  # restrict the fetch to specific classes (e.g. just 'person')
         if boxed_only and not any("bbox" in a or "bbox_relative" in a for a in anns):
             continue
         if md_files is not None and image["file_name"] not in md_files:
@@ -125,6 +128,9 @@ def main() -> int:
                    "images MD boxed (for datasets with no native boxes, e.g. Idaho).")
     p.add_argument("--md-conf", type=float, default=0.2, help="Min MD confidence for --md-results.")
     p.add_argument("--max-per-class", type=int, default=None, help="Cap images per dominant class.")
+    p.add_argument("--only-classes", default=None,
+                   help="Comma-separated classes to restrict the fetch to (e.g. 'person' to grab just "
+                        "the human frames without re-listing every species image).")
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--limit", type=int, default=None, help="Only download the first N (testing).")
     args = p.parse_args()
@@ -139,8 +145,10 @@ def main() -> int:
         md_files = md_animal_files(md, args.md_conf)
         print(f"MegaDetector boxed {len(md_files)} image(s) (conf>={args.md_conf})")
 
+    only_classes = {c.strip() for c in args.only_classes.split(",")} if args.only_classes else None
     files = target_file_names(meta, active, boxed_only=args.boxed_only,
-                              max_per_class=args.max_per_class, md_files=md_files)
+                              max_per_class=args.max_per_class, md_files=md_files,
+                              only_classes=only_classes)
     if args.limit:
         files = files[: args.limit]
     print(f"{len(files)} target image(s) to fetch -> {out}")

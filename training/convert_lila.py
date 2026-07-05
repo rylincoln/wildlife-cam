@@ -101,6 +101,11 @@ def main() -> int:
     p.add_argument("--tiers", default="12")
     p.add_argument("--no-support", action="store_true")
     p.add_argument("--conf-thresh", type=float, default=0.2, help="Min MD detection confidence.")
+    p.add_argument("--min-box-rel-area", type=float, default=0.0,
+                   help="Drop boxes smaller than this fraction of the frame. The Idaho set has no "
+                        "native boxes, so its MegaDetector fired on distant specks across whole "
+                        "sequences, all inheriting the sequence-level label (89%% of pronghorn boxes "
+                        "were <1%% of frame -> 'pronghorn = speck'). Re-convert idaho with 0.01 to prune.")
     p.add_argument("--copy", action="store_true", help="Copy images instead of symlinking.")
     args = p.parse_args()
 
@@ -189,6 +194,9 @@ def main() -> int:
                 else:
                     stats["skip_no_dims"] += 1
                     continue
+                if bw * bh < args.min_box_rel_area:
+                    stats["skip_tiny_box"] += 1
+                    continue
                 lines.append(f"{cls_index[m]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
         else:
             # (b) Image-level species + MegaDetector animal boxes.
@@ -208,6 +216,9 @@ def main() -> int:
                 if not box:
                     continue
                 xc, yc, bw, bh = norm_bbox_to_yolo(box)
+                if bw * bh < args.min_box_rel_area:
+                    stats["skip_tiny_box"] += 1
+                    continue
                 lines.append(f"{cls_index[only_cls]} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
 
         if lines:
@@ -216,7 +227,8 @@ def main() -> int:
             stats["skip_no_boxes"] += 1
 
     print(f"Converted into {out}")
-    for k in ("labeled", "background", "skip_unmapped", "skip_no_boxes", "skip_no_dims", "skip_missing"):
+    for k in ("labeled", "background", "skip_unmapped", "skip_no_boxes", "skip_no_dims",
+              "skip_tiny_box", "skip_missing"):
         if stats[k]:
             print(f"  {k}: {stats[k]}")
     if unmapped:
