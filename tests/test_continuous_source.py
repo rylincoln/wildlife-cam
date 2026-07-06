@@ -87,3 +87,35 @@ def test_make_event_source_dispatches_continuous():
     camera = SimpleNamespace(id="cam1", motion_mask=None)
     src = make_event_source("continuous_motion", camera, config)
     assert isinstance(src, ContinuousMotionEventSource)
+
+
+def test_read_loop_returns_false_on_immediate_eof():
+    src = _source(warmup_s=0, refractory_s=0)
+    src._detector = SimpleNamespace(update=lambda f: None, reset=lambda: None)
+
+    class _EofCap:
+        def grab(self):
+            return False  # immediate EOF
+
+    assert src._read_loop(_EofCap()) is False
+
+
+def test_read_loop_returns_true_after_a_frame_is_delivered():
+    src = _source(warmup_s=0, refractory_s=0)
+    # A no-motion result so no emit happens; we only care about the delivered flag.
+    src._detector = SimpleNamespace(
+        update=lambda f: _result(motion=False), reset=lambda: None
+    )
+
+    class _OneFrameCap:
+        def __init__(self):
+            self._grabs = 0
+
+        def grab(self):
+            self._grabs += 1
+            return self._grabs == 1  # one frame, then EOF
+
+        def retrieve(self):
+            return True, object()  # a dummy frame; the fake detector ignores it
+
+    assert src._read_loop(_OneFrameCap()) is True
