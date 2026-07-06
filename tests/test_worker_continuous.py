@@ -94,6 +94,7 @@ def _stop_and_join(worker: _Worker) -> None:
     worker._shutdown.set()
     for t in worker._producer_threads:
         t.join(timeout=1.0)
+        assert not t.is_alive()
 
 
 def test_second_producer_starts_only_when_enabled(monkeypatch):
@@ -117,3 +118,78 @@ def test_second_producer_starts_only_when_enabled(monkeypatch):
     off._start_producers()
     assert len(off._producer_threads) == 1  # reolink only
     _stop_and_join(off)
+
+
+from datetime import datetime  # noqa: E402
+
+from wildlife.events.continuous_motion import EVENT_KIND  # noqa: E402
+from wildlife.gate import Deduper  # noqa: E402
+from wildlife.models import CameraEvent  # noqa: E402
+
+
+def _prime_consumer(worker: _Worker) -> None:
+    """Give _handle_event the non-None collaborators it asserts on."""
+    worker._detector = object()
+    worker._store = object()
+    worker._deduper = Deduper(0, 10_000)  # always processes
+
+
+def test_continuous_event_routes_burst_through_go2rtc(monkeypatch):
+    worker = _make_worker(continuous_enabled=True)
+    _prime_consumer(worker)
+    captured = {}
+
+    def _fake_grab(camera, n, interval, stream, timeout, rtsp_url=None):
+        captured["url"] = rtsp_url
+        return []  # empty -> _handle_event returns before touching detector/store
+
+    monkeypatch.setattr("wildlife.worker.grab_burst", _fake_grab)
+    worker._handle_event(
+        CameraEvent(camera_id="cam1", event_ts=datetime(2026, 7, 6, 12), kind=EVENT_KIND)
+    )
+    assert captured["url"] == "rtsp://127.0.0.1:8554/cam1_main"
+
+
+def test_reolink_event_uses_direct_burst(monkeypatch):
+    worker = _make_worker(continuous_enabled=True)
+    _prime_consumer(worker)
+    captured = {}
+
+    def _fake_grab(camera, n, interval, stream, timeout, rtsp_url=None):
+        captured["url"] = rtsp_url
+        return []
+
+    monkeypatch.setattr("wildlife.worker.grab_burst", _fake_grab)
+    worker._handle_event(
+        CameraEvent(camera_id="cam1", event_ts=datetime(2026, 7, 6, 12), kind="animal")
+    )
+    assert captured["url"] is None
+
+
+def test_continuous_capture_persists_source_kind(monkeypatch, tmp_path):
+    import numpy as np
+
+    from wildlife.models import Detection
+    from wildlife.store import Store
+
+    class _FakeDetector:
+        def infer(self, _frame):
+            return [Detection("bird", 0.95, (0.0, 0.0, 40.0, 40.0), 0.3)]
+
+    worker = _make_worker(continuous_enabled=True)
+    worker._detector = _FakeDetector()
+    worker._store = Store(tmp_path / "c.db", tmp_path / "caps")
+    worker._store.init_schema()
+    worker._deduper = Deduper(0, 10_000)
+
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        "wildlife.worker.grab_burst",
+        lambda *a, **k: [frame],
+    )
+    worker._handle_event(
+        CameraEvent(camera_id="cam1", event_ts=datetime(2026, 7, 6, 12), kind=EVENT_KIND)
+    )
+    rows = worker._store.query(camera_id="cam1")
+    assert rows and rows[0]["source_kind"] == "continuous"
+    worker._store.close()
