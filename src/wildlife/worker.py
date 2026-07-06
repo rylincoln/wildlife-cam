@@ -195,16 +195,26 @@ class _Worker:
         signal.signal(signal.SIGINT, _handler)
 
     def _start_producers(self) -> None:
-        """Launch one daemon producer thread per camera."""
+        """Launch the primary event producer per camera, plus continuous if enabled."""
+        continuous_on = self._config.continuous.enabled
         for camera in self._cameras.values():
-            thread = threading.Thread(
+            primary = threading.Thread(
                 target=self._produce,
-                args=(camera,),
+                args=(camera, self._config.event_source),
                 name=f"events-{camera.id}",
                 daemon=True,
             )
-            thread.start()
-            self._producer_threads.append(thread)
+            primary.start()
+            self._producer_threads.append(primary)
+            if continuous_on:
+                motion = threading.Thread(
+                    target=self._produce,
+                    args=(camera, "continuous_motion"),
+                    name=f"motion-{camera.id}",
+                    daemon=True,
+                )
+                motion.start()
+                self._producer_threads.append(motion)
 
     def _teardown(self) -> None:
         """Close event sources, drain the queue, and close the store."""
@@ -252,19 +262,20 @@ class _Worker:
 
     # -- producer side -----------------------------------------------------
 
-    def _produce(self, camera: CameraConfig) -> None:
-        """Stream events from one camera onto the shared queue, with reconnect.
+    def _produce(self, camera: CameraConfig, kind: str) -> None:
+        """Stream events of one ``kind`` from a camera onto the shared queue.
 
-        Each iteration (re)creates the camera's event source and forwards every
-        :class:`CameraEvent` it yields onto the queue. If the stream ends or
-        raises, we back off (capped, exponential) and reconnect -- unless a
-        shutdown has been requested, in which case we exit promptly.
+        Each iteration (re)creates the camera's event source for ``kind`` and
+        forwards every :class:`CameraEvent` it yields onto the queue, reconnecting
+        with capped exponential backoff. The source registry is keyed on
+        ``camera.id:kind`` so a camera's multiple producers (e.g. reolink +
+        continuous) never clobber each other and both are closed on teardown.
         """
         backoff = _INITIAL_BACKOFF_S
-        kind = self._config.event_source
+        source_key = f"{camera.id}:{kind}"
         while not self._shutdown.is_set():
             try:
-                source = make_event_source(kind, camera)
+                source = make_event_source(kind, camera, self._config)
             except Exception:  # noqa: BLE001 - keep the producer alive
                 logger.exception(
                     "Camera %s: failed to create event source (%s).", camera.id, kind
@@ -275,7 +286,7 @@ class _Worker:
                 continue
 
             with self._sources_lock:
-                self._sources[camera.id] = source
+                self._sources[source_key] = source
             logger.info("Camera %s: event source started (%s).", camera.id, kind)
 
             try:
