@@ -40,6 +40,7 @@ from wildlife.capture import grab_burst
 from wildlife.config import CameraConfig, Config, load_config
 from wildlife.detect import Detector
 from wildlife.events.base import EventSource, make_event_source
+from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
 from wildlife.gate import Deduper, pick_best, select_keepers
 from wildlife.models import CameraEvent, Detection
 from wildlife.store import Store
@@ -70,6 +71,11 @@ def _now() -> datetime:
     so this is the *only* place the worker samples real time for decisions.
     """
     return datetime.now()
+
+
+def _rtsp_port(listen: str) -> int:
+    """Extract the go2rtc RTSP port from a bind string (e.g. ``":8554"``)."""
+    return int(listen.rsplit(":", 1)[-1])
 
 
 def _ensure_logging() -> None:
@@ -399,14 +405,23 @@ class _Worker:
             )
             return
 
-        # 3) Capture a short burst from the configured stream.
+        # 3) Capture a short burst from the configured stream. Continuous-motion
+        # events route through go2rtc (avoids a second same-IP Reolink session);
+        # Reolink events keep the direct path.
         cap = self._config.capture
+        is_continuous = event.kind == CONTINUOUS_EVENT_KIND
+        if is_continuous:
+            rtsp_port = _rtsp_port(self._config.livestream.rtsp_listen)
+            burst_url = f"rtsp://127.0.0.1:{rtsp_port}/{camera_id}_{cap.stream}"
+        else:
+            burst_url = None
         frames = grab_burst(
             camera,
             cap.burst_frames,
             cap.burst_interval_ms,
             cap.stream,
             cap.rtsp_timeout_s,
+            rtsp_url=burst_url,
         )
         if not frames:
             logger.warning(
@@ -441,6 +456,7 @@ class _Worker:
                 positives.extend((frame, k) for k in keepers)
 
         # 5) Save: the single best frame, or every positive detection.
+        source_kind = "continuous" if is_continuous else "reolink"
         capture_ts = _now()
         saved_ids: list[int] = []
         if save_best_only:
@@ -452,6 +468,7 @@ class _Worker:
                         capture_ts=capture_ts,
                         frame=best_frame,
                         det=best_det,
+                        source_kind=source_kind,
                     )
                 )
         else:
@@ -463,6 +480,7 @@ class _Worker:
                         capture_ts=capture_ts,
                         frame=frame,
                         det=det,
+                        source_kind=source_kind,
                     )
                 )
 
