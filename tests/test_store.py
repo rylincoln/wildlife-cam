@@ -600,3 +600,67 @@ def test_count_and_reviewed_filter(tmp_path: Path) -> None:
         assert store.count(camera_id="cam") == len(store.query(camera_id="cam", limit=1000))
     finally:
         store.close()
+
+
+def test_source_kind_defaults_to_reolink(tmp_path: Path) -> None:
+    """source_kind defaults to 'reolink' when not explicitly provided."""
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam",
+            event_ts=datetime(2026, 7, 6, 12, 0, 0),
+            capture_ts=datetime(2026, 7, 6, 12, 0, 1),
+            frame=_make_frame(),
+            det=_det("bird", 0.9),
+        )
+        assert store.get(cid)["source_kind"] == "reolink"
+    finally:
+        store.close()
+
+
+def test_source_kind_continuous_round_trips(tmp_path: Path) -> None:
+    """source_kind='continuous' is saved and retrieved correctly."""
+    store = _new_store(tmp_path)
+    try:
+        cid = store.save_capture(
+            camera_id="cam",
+            event_ts=datetime(2026, 7, 6, 12, 0, 0),
+            capture_ts=datetime(2026, 7, 6, 12, 0, 1),
+            frame=_make_frame(),
+            det=_det("deer", 0.8),
+            source_kind="continuous",
+        )
+        assert store.get(cid)["source_kind"] == "continuous"
+    finally:
+        store.close()
+
+
+def test_source_kind_migrates_onto_a_legacy_db(tmp_path: Path) -> None:
+    """A pre-existing captures table without source_kind gains it, defaulting to reolink."""
+    import sqlite3
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE captures ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, camera_id TEXT NOT NULL, "
+        "event_ts TEXT NOT NULL, capture_ts TEXT NOT NULL, label TEXT NOT NULL, "
+        "confidence REAL NOT NULL, box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL, "
+        "image_path TEXT NOT NULL, thumb_path TEXT NOT NULL, width INTEGER, height INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO captures (camera_id, event_ts, capture_ts, label, confidence, "
+        "image_path, thumb_path) VALUES ('cam1','t','t','bird',0.9,'a.jpg','a_thumb.jpg')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db_path=db, captures_dir=tmp_path / "caps")
+    try:
+        store.init_schema()  # runs _migrate
+        cols = {r["name"] for r in store._conn.execute("PRAGMA table_info(captures)")}
+        assert "source_kind" in cols
+        rows = store.query(camera_id="cam1")
+        assert rows[0]["source_kind"] == "reolink"
+    finally:
+        store.close()
