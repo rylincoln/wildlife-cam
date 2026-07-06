@@ -168,7 +168,6 @@ class ContinuousMotionEventSource(_QueueBackedEventSource):
                 backoff = min(backoff * 2, _MAX_BACKOFF_S)
                 continue
 
-            backoff = _INITIAL_BACKOFF_S
             self._detector = MotionDetector(
                 self._downscale_width,
                 self._min_area_frac,
@@ -177,12 +176,28 @@ class ContinuousMotionEventSource(_QueueBackedEventSource):
             )
             self._arm_warmup()
             logger.info("Camera %s: continuous motion source reading %s.", self.camera.id, url)
+            delivered = False
             try:
-                self._read_loop(cap)
+                delivered = self._read_loop(cap)
             except Exception:  # noqa: BLE001 - reopen rather than die
                 logger.exception("Camera %s: continuous read loop error.", self.camera.id)
             finally:
                 cap.release()
+
+            if self._stopping:
+                break
+            # Only a stream that actually delivered frames earns a fast reconnect;
+            # an open-then-immediate-EOF keeps growing backoff so we don't churn
+            # RTSP sessions when go2rtc is up but the sub stream is unavailable.
+            if delivered:
+                backoff = _INITIAL_BACKOFF_S
+            logger.warning(
+                "Camera %s: continuous stream ended; reconnecting in %.1fs.",
+                self.camera.id,
+                backoff,
+            )
+            self._sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF_S)
 
     def _open_capture(self, cv2, url: str):
         """Open a TCP-forced, single-buffered FFmpeg capture with open/read timeouts."""
@@ -197,14 +212,26 @@ class ContinuousMotionEventSource(_QueueBackedEventSource):
             pass
         return cap
 
-    def _read_loop(self, cap) -> None:
-        """Grab frames (paced by the stream), decode at sample_fps, emit on motion."""
+    # `_signal_stop` is intentionally NOT overridden: a `cv2.VideoCapture.grab()`
+    # cannot be safely cancelled cross-thread, so on shutdown a wedged read may
+    # delay this daemon thread's exit up to the ~10s RTSP read timeout
+    # (`CAP_PROP_READ_TIMEOUT_MSEC`). The process is never blocked by this since
+    # the thread is a daemon and the queue consumer is unblocked immediately by
+    # the sentinel.
+    def _read_loop(self, cap) -> bool:
+        """Grab frames (paced by the stream), decode at sample_fps, emit on motion.
+
+        Returns True if at least one frame was successfully retrieved (a healthy
+        stream), so the caller can distinguish a real stream that later ended
+        from an open-then-immediate-EOF that should back off.
+        """
         last_sample = 0.0
+        delivered = False
         while not self._stopping:
             # grab() blocks on the socket -> the loop is paced by the stream, not a
             # busy spin; a wedged read fails the RTSP timeout and ends the loop.
             if not cap.grab():
-                return  # stream ended -> outer loop reopens
+                return delivered  # stream ended -> outer loop reopens
             now = time.monotonic()
             if (now - last_sample) < self._sample_interval_s:
                 continue  # drain to the newest frame without decoding
@@ -212,6 +239,7 @@ class ContinuousMotionEventSource(_QueueBackedEventSource):
             ok, frame = cap.retrieve()
             if not ok or frame is None:
                 continue
+            delivered = True
             result = self._detector.update(frame)
             action = self._consider(result, time.monotonic(), datetime.now())
             if action == "reset":
@@ -230,3 +258,4 @@ class ContinuousMotionEventSource(_QueueBackedEventSource):
                     self.camera.id,
                     result.area_frac,
                 )
+        return delivered
