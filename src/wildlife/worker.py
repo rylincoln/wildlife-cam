@@ -231,6 +231,9 @@ class _Worker:
         # stream() is unblocked. EventSource.close() is optional in the contract.
         with self._sources_lock:
             sources = list(self._sources.values())
+        # Closed sequentially, so a continuous source's close() blocking up to
+        # ~10s on a wedged cv2 read (the read timeout) means N cameras wedged at
+        # once cost worst-case ~N x 10s here -- bounded, daemon-threaded, never hangs.
         for source in sources:
             close = getattr(source, "close", None)
             if callable(close):
