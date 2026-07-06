@@ -46,24 +46,20 @@ class MotionResult:
 class MotionDetector:
     """Decide per-frame motion via MOG2 background subtraction (or frame diff).
 
-    Parameters
-    ----------
-    downscale_width:
-        Width (px) the motion computation runs at; taller frames are shrunk to
-        this width (aspect preserved) so the vision work stays cheap.
-    min_area_frac:
-        The largest motion contour must cover at least this fraction of the
-        downscaled frame to count as motion.
-    algorithm:
-        ``"mog2"`` (default; adapts to swaying vegetation / gradual light) or
-        ``"frame_diff"`` (lighter absdiff-vs-rolling-reference fallback).
-    mask_polys:
-        Optional ignore regions as normalised ``0..1`` polygons; motion inside
-        them is discarded (roads / canopy / flags / water).
-    scene_change_thresh:
-        Mean absolute (0..255) whole-frame diff above which ``scene_change`` trips.
-    history, var_threshold:
-        MOG2 tuning (``detectShadows`` is always False).
+    Args:
+        downscale_width: Width (px) the motion computation runs at; wider frames
+            are shrunk to this width (aspect preserved) so the vision work stays
+            cheap.
+        min_area_frac: The largest motion contour must cover at least this
+            fraction of the downscaled frame to count as motion.
+        algorithm: ``"mog2"`` (default; adapts to swaying vegetation / gradual
+            light) or ``"frame_diff"`` (lighter absdiff-vs-rolling-reference
+            fallback).
+        mask_polys: Optional ignore regions as normalised ``0..1`` polygons;
+            motion inside them is discarded (roads / canopy / flags / water).
+        scene_change_thresh: Mean absolute (0..255) whole-frame diff above which
+            ``scene_change`` trips.
+        history, var_threshold: MOG2 tuning (``detectShadows`` is always False).
     """
 
     def __init__(
@@ -89,7 +85,7 @@ class MotionDetector:
         self._mask: np.ndarray | None = None  # rasterised keep-mask at work size
         self._subtractor = self._make_subtractor()
 
-    def _make_subtractor(self):
+    def _make_subtractor(self) -> "cv2.BackgroundSubtractorMOG2 | None":
         """Build a fresh MOG2 subtractor (None for the frame_diff algorithm)."""
         if self._algorithm == "mog2":
             return cv2.createBackgroundSubtractorMOG2(
@@ -108,6 +104,7 @@ class MotionDetector:
         self._subtractor = self._make_subtractor()
         self._prev_gray = None
         self._ref_gray = None
+        self._mask = None
 
     def update(self, frame_bgr: np.ndarray) -> MotionResult:
         """Return the :class:`MotionResult` for one BGR frame."""

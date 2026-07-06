@@ -82,3 +82,16 @@ def test_reset_rebuilds_state_without_error():
     # After reset the detector still works.
     result = det.update(_with_blob())
     assert isinstance(result, MotionResult)
+
+
+def test_reset_clears_mask_cache_across_frame_shape_change():
+    # A full-frame ignore mask is cached at the first frame's downscaled shape.
+    full = [[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]]
+    det = MotionDetector(downscale_width=160, min_area_frac=0.01, mask_polys=full)
+    det.update(_blank(h=180, w=320))  # caches mask at downscaled (90, 160)
+    det.reset()
+    # A different aspect ratio -> different working shape; must not raise
+    # (before the fix, the stale mask makes cv2.bitwise_and throw).
+    result = det.update(_blank(h=240, w=160))  # shape (240, 160), no resize
+    assert isinstance(result, MotionResult)
+    assert result.motion is False  # everything masked out
