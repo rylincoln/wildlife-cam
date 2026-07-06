@@ -6,6 +6,8 @@ cameras:
     rtsp_main: "rtsp://{username}:{password}@{host}:554/Preview_01_main"
     rtsp_sub: "rtsp://{username}:{password}@{host}:554/Preview_01_sub"
     onvif_port: 8000
+    # motion_mask: # optional ignore-motion polygons (normalized 0..1) — roads/canopy/water
+    #   - [[0.0, 0.7], [1.0, 0.7], [1.0, 1.0], [0.0, 1.0]] # ignore the bottom 30% (e.g. a road)
   - id: south_trail
     host: 192.168.1.102
     username: admin
@@ -87,3 +89,13 @@ remote: # optional Cloudflare-Tunnel remote access (see README "Remote access")
   base_url: "" # your public URL, e.g. "https://cam.rlblais.org" (used to build the share link)
   share_secret_hash: null # Werkzeug hash of the shared secret; managed by `wildlife-share-secret`
   block_admin: true # refuse /admin over the tunnel (config editing stays LAN-only)
+
+continuous: # optional always-on motion-gated detection (your model becomes the gate)
+  enabled: false # set true to run a second, MOG2-motion-gated producer per camera
+  sample_fps: 4 # frames/sec sampled from the sub restream for motion (not full fps)
+  downscale_width: 480 # px width the motion detector runs at (motion computed downscaled)
+  min_area_frac: 0.003 # largest motion contour must be >= this fraction of the frame
+  refractory_s: 8 # min seconds between motion emits per camera (one animal -> one event)
+  warmup_s: 10 # suppress emits this long after (re)connect while MOG2 stabilizes
+  algorithm: mog2 # mog2 | frame_diff
+  active_hours: "" # optional "HH:MM-HH:MM" local window; empty = 24/7
