@@ -372,6 +372,60 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 
 ---
 
+## Continuous (motion-gated) detection
+
+By default the pipeline only looks when Reolink's onboard AI fires. Continuous
+detection adds a second, always-on producer per camera that runs a cheap MOG2
+motion gate on the go2rtc **sub** restream and fires your own YOLO on motion — so
+*your* fine-tuned model, not Reolink's person/car AI, decides what counts. This
+catches small, distant, and nocturnal wildlife the camera silently ignores.
+
+**Requires the go2rtc daemon running** (installed and started per
+[Live view (optional)](#live-view-optional)): the motion reader consumes go2rtc's
+`_sub` restream directly at `rtsp://127.0.0.1:<rtsp_listen port>/<camera id>_sub`,
+and bursts are grabbed back through go2rtc's configured burst stream
+(`capture.stream`, `main` by default) — no second direct camera session. This is
+independent of `livestream.enabled`, which only controls the gallery's in-browser
+Live tab; go2rtc generates and serves the per-camera `_main`/`_sub` streams
+regardless of that setting, so the daemon just needs to be running. Because the
+motion reader keeps a client connected, go2rtc holds that `_sub` upstream open
+continuously (rather than only while someone is watching the live page). No
+launchd start-order changes are needed: the
+shipped daemons start the worker (`com.wildlife.detect`) before go2rtc
+(`com.wildlife.stream`), but the motion reader retries with backoff until go2rtc is
+reachable, so at boot you may briefly see it reconnecting in the logs until go2rtc
+comes up.
+
+Enable it in `config.yaml`:
+
+    continuous:
+      enabled: true
+
+**Motion masks (effectively required in busy scenes).** A yard with a road,
+swaying canopy, a flag, or moving water will trip MOG2 constantly. Add per-camera
+`motion_mask` ignore polygons (normalized 0..1 coordinates) to blank those regions:
+
+    cameras:
+      - id: north_field
+        # ...
+        motion_mask:
+          - [[0.0, 0.7], [1.0, 0.7], [1.0, 1.0], [0.0, 1.0]]  # ignore the bottom 30%
+
+**Tuning knobs** (start with the defaults, then adjust on real footage):
+`min_area_frac` and `refractory_s` are the dominant levers for cutting trigger
+volume; `active_hours` duty-cycles by time of day; `algorithm: frame_diff` is a
+lighter fallback for a weaker host. Continuous captures are tagged
+`source_kind = "continuous"` in the database (vs `"reolink"`) so you can tell the
+two paths apart when tuning.
+
+Because a second producer now feeds the same queue, the global
+`resource_guard.max_burst_per_minute` cap (which limits how often inference
+fires) may need raising so continuous events aren't starved by Reolink ones; the
+per-camera `dedupe.cooldown_s` and `resource_guard.detect_every_nth_event`
+throttles apply to continuous events for free.
+
+---
+
 ## Running as a service (launchd)
 
 For 24/7 operation, install the worker and gallery as **LaunchDaemons** (not
