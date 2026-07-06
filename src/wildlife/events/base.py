@@ -235,6 +235,10 @@ def make_event_source(kind: str, camera: object, config: object = None) -> Event
 
         return OnvifEventSource(camera)
     if kind == "continuous_motion":
+        if config is None:
+            raise ValueError(
+                "event_source 'continuous_motion' requires a config argument"
+            )
         from wildlife.events.continuous_motion import ContinuousMotionEventSource
 
         return ContinuousMotionEventSource(camera, config)

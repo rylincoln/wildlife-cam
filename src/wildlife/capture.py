@@ -103,10 +103,10 @@ def grab_burst(
         n: Number of frames to attempt to grab.
         interval_ms: Target spacing between successive frame grabs.
         stream: ``"main"`` or ``"sub"`` — which RTSP URL to open.
-        rtsp_url: Optional explicit RTSP URL to open instead of the camera's
-            own main/sub URL — used to route continuous bursts through go2rtc.
         timeout_s: Overall wall-clock budget for the burst (also applied as the
             FFmpeg open/read timeout where supported).
+        rtsp_url: Optional explicit RTSP URL to open instead of the camera's
+            own main/sub URL — used to route continuous bursts through go2rtc.
 
     Returns:
         A list of BGR ``numpy.ndarray`` frames, newest-last. May be shorter than

@@ -89,6 +89,15 @@ def test_make_event_source_dispatches_continuous():
     assert isinstance(src, ContinuousMotionEventSource)
 
 
+def test_make_event_source_continuous_requires_config():
+    import pytest
+    from wildlife.events.base import make_event_source
+
+    camera = SimpleNamespace(id="cam1", motion_mask=None)
+    with pytest.raises(ValueError):
+        make_event_source("continuous_motion", camera)  # no config
+
+
 def test_read_loop_returns_false_on_immediate_eof():
     src = _source(warmup_s=0, refractory_s=0)
     src._detector = SimpleNamespace(update=lambda f: None, reset=lambda: None)

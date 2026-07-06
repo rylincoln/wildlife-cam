@@ -380,12 +380,17 @@ motion gate on the go2rtc **sub** restream and fires your own YOLO on motion —
 *your* fine-tuned model, not Reolink's person/car AI, decides what counts. This
 catches small, distant, and nocturnal wildlife the camera silently ignores.
 
-**Requires go2rtc** (the [`livestream`](#live-view-optional) feature): the motion
-reader consumes `rtsp://127.0.0.1:<rtsp_listen port>/<camera id>_sub`, and bursts are
-grabbed back through go2rtc's configured burst stream (`capture.stream`, `main` by
-default) — no second direct camera session. Because the reader keeps a client
-connected, go2rtc holds that `_sub` upstream open continuously (rather than only while
-someone is watching the live page). No launchd start-order changes are needed: the
+**Requires the go2rtc daemon running** (installed and started per
+[Live view (optional)](#live-view-optional)): the motion reader consumes go2rtc's
+`_sub` restream directly at `rtsp://127.0.0.1:<rtsp_listen port>/<camera id>_sub`,
+and bursts are grabbed back through go2rtc's configured burst stream
+(`capture.stream`, `main` by default) — no second direct camera session. This is
+independent of `livestream.enabled`, which only controls the gallery's in-browser
+Live tab; go2rtc generates and serves the per-camera `_main`/`_sub` streams
+regardless of that setting, so the daemon just needs to be running. Because the
+motion reader keeps a client connected, go2rtc holds that `_sub` upstream open
+continuously (rather than only while someone is watching the live page). No
+launchd start-order changes are needed: the
 shipped daemons start the worker (`com.wildlife.detect`) before go2rtc
 (`com.wildlife.stream`), but the motion reader retries with backoff until go2rtc is
 reachable, so at boot you may briefly see it reconnecting in the logs until go2rtc
