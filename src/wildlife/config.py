@@ -18,6 +18,7 @@ This module depends only on pydantic v2 and PyYAML. It MUST NOT import
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -60,7 +61,7 @@ class CameraConfig(BaseModel):
     def _validate_motion_mask(
         cls, value: list[list[tuple[float, float]]] | None
     ) -> list[list[tuple[float, float]]] | None:
-        """Each ignore polygon needs >=3 points, all with x,y in [0, 1]."""
+        """Each ignore polygon needs at least 3 points, all with x,y in [0, 1]."""
         if value is None:
             return None
         for poly in value:
@@ -265,8 +266,6 @@ class ContinuousConfig(BaseModel):
         value = value.strip()
         if not value:
             return ""
-        import re
-
         m = re.fullmatch(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", value)
         if not m:
             raise ValueError('active_hours must be "" or "HH:MM-HH:MM"')

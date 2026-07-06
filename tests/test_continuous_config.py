@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from wildlife.config import CameraConfig, ContinuousConfig
+from wildlife.config import CameraConfig, Config, ContinuousConfig
 
 
 def _camera(**overrides):
@@ -19,6 +19,39 @@ def _camera(**overrides):
     )
     base.update(overrides)
     return base
+
+
+def _minimal_config_dict() -> dict:
+    """A minimal mapping that Config.model_validate accepts (no cameras needed).
+
+    Mirrors the helper of the same name in tests/test_config_remote.py: all
+    required sections present, no ``continuous`` key, so it exercises the
+    default-factory path for ContinuousConfig.
+    """
+    return {
+        "cameras": [],
+        "event_source": "reolink_native",
+        "capture": {
+            "burst_frames": 5, "burst_interval_ms": 200, "stream": "main",
+            "rtsp_timeout_s": 10, "max_concurrent": 1,
+        },
+        "detection": {
+            "model_path": "models/yolov8s.pt", "device": "cpu",
+            "animal_classes": ["bird"], "confidence_threshold": 0.5,
+            "min_box_area_frac": 0.01, "save_best_only": True,
+        },
+        "dedupe": {"cooldown_s": 30},
+        "storage": {"captures_dir": "/tmp/wl-caps", "db_path": "/tmp/wl.db"},
+        "retention": {"max_age_days": 30},
+        "gallery": {"host": "0.0.0.0", "port": 8080, "page_size": 60},
+        "resource_guard": {},
+    }
+
+
+def test_continuous_absent_from_config_still_validates_and_defaults_disabled():
+    """A full Config with no `continuous:` block must stay inert by default."""
+    cfg = Config.model_validate(_minimal_config_dict())
+    assert cfg.continuous.enabled is False
 
 
 def test_continuous_defaults_are_inert():
@@ -44,6 +77,10 @@ def test_continuous_rejects_bad_values():
         ContinuousConfig(min_area_frac=1.0)
     with pytest.raises(ValidationError):
         ContinuousConfig(algorithm="optical_flow")
+    with pytest.raises(ValidationError):
+        ContinuousConfig(refractory_s=-1)
+    with pytest.raises(ValidationError):
+        ContinuousConfig(warmup_s=-1)
 
 
 def test_active_hours_accepts_empty_and_valid_windows():
