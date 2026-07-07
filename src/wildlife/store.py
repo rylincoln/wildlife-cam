@@ -199,6 +199,7 @@ def _build_filters(
     end: datetime | str | None,
     min_confidence: float | None,
     reviewed: bool | None,
+    source_kind: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     """Build the shared AND-combined WHERE clauses + params for query/count."""
     clauses: list[str] = []
@@ -221,6 +222,9 @@ def _build_filters(
     if reviewed is not None:
         clauses.append("reviewed = ?")
         params.append(1 if reviewed else 0)
+    if source_kind is not None:
+        clauses.append("source_kind = ?")
+        params.append(source_kind)
     return clauses, params
 
 
@@ -506,19 +510,21 @@ class Store:
         end: datetime | str | None = None,
         min_confidence: float | None = None,
         reviewed: bool | None = None,
+        source_kind: str | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return matching rows as dicts, newest first.
 
         All filters are optional and AND-combined. ``start``/``end`` bound
-        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag.
+        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag;
+        ``source_kind`` matches the provenance column exactly (e.g. ``"audio"``).
         Results are ordered by ``capture_ts`` desc (ties by ``id`` desc) and
         paginated via ``limit``/``offset``.
         """
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
-            min_confidence=min_confidence, reviewed=reviewed,
+            min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
         )
         sql = "SELECT * FROM captures"
         if clauses:
@@ -537,11 +543,12 @@ class Store:
         end: datetime | str | None = None,
         min_confidence: float | None = None,
         reviewed: bool | None = None,
+        source_kind: str | None = None,
     ) -> int:
         """Return the number of rows matching the same filters as :meth:`query`."""
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
-            min_confidence=min_confidence, reviewed=reviewed,
+            min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
         )
         sql = "SELECT COUNT(*) FROM captures"
         if clauses:

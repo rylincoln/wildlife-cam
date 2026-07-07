@@ -98,6 +98,7 @@ def _parse_filters(args) -> dict:
     start_raw = (args.get("start") or "").strip()
     end_raw = (args.get("end") or "").strip()
     min_conf_raw = (args.get("min_confidence") or "").strip()
+    source_kind = (args.get("source_kind") or "").strip() or None
     return {
         "camera": camera,
         "label": label,
@@ -107,6 +108,7 @@ def _parse_filters(args) -> dict:
         "start": _parse_date(start_raw),
         "end": _parse_date(end_raw, end_of_day=True),
         "min_confidence": _parse_float(min_conf_raw),
+        "source_kind": source_kind,
     }
 
 
@@ -342,6 +344,8 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             ],
             "thumb_url": url_for("thumb", capture_id=cid),
             "image_url": url_for("image", capture_id=cid),
+            "source_kind": row.get("source_kind"),
+            "audio_url": url_for("audio", capture_id=cid) if row.get("audio_path") else None,
         }
 
     def _query_page(filters: dict, page: int) -> tuple[list[dict], bool]:
@@ -357,6 +361,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             start=filters["start"],
             end=filters["end"],
             min_confidence=filters["min_confidence"],
+            source_kind=filters["source_kind"],
             limit=page_size + 1,
             offset=offset,
         )
@@ -411,6 +416,21 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     def thumb(capture_id: int):
         """Serve the thumbnail JPEG for a capture id."""
         return _serve_file(capture_id, "thumb_path")
+
+    @app.route("/audio/<int:capture_id>")
+    def audio(capture_id: int):
+        """Serve the AAC/.m4a clip for an audio capture (range-enabled)."""
+        row = get_store().get(capture_id)
+        if not row or not row.get("audio_path"):
+            abort(404)
+        full = (captures_dir / row["audio_path"]).resolve()
+        try:
+            full.relative_to(captures_dir)
+        except ValueError:
+            abort(403)
+        if not full.is_file():
+            abort(404)
+        return send_file(full, mimetype="audio/mp4", conditional=True)
 
     def _serve_file(capture_id: int, key: str):
         """Resolve a stored relative path safely and stream the JPEG."""
