@@ -47,3 +47,16 @@ def test_species_tracked_independently():
     assert rc.offer("jay", 0.9, _t(1)) is False       # different species, own count
     assert rc.offer("robin", 0.9, _t(2)) is True      # robin reaches 2
     assert rc.offer("jay", 0.9, _t(3)) is True         # jay reaches 2 independently
+
+
+def test_boundary_semantics_window_and_cooldown_inclusive():
+    # A hit exactly confirm_window_s ago is still within the window -> fires.
+    rc = RepeatConfirmer(min_confirmations=2, confirm_window_s=10, cooldown_s=30)
+    assert rc.offer("robin", 0.9, _t(0)) is False
+    assert rc.offer("robin", 0.9, _t(10)) is True
+    # A re-offer exactly cooldown_s after a fire is past cooldown (accumulates again).
+    rc2 = RepeatConfirmer(min_confirmations=2, confirm_window_s=60, cooldown_s=30)
+    assert rc2.offer("jay", 0.9, _t(0)) is False
+    assert rc2.offer("jay", 0.9, _t(1)) is True    # fire; cooldown until t=31
+    assert rc2.offer("jay", 0.9, _t(31)) is False  # exactly cooldown_s later -> allowed (1st new hit)
+    assert rc2.offer("jay", 0.9, _t(32)) is True   # 2nd new hit -> fires
