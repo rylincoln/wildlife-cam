@@ -18,6 +18,7 @@ This module depends only on pydantic v2 and PyYAML. It MUST NOT import
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -36,6 +37,7 @@ __all__ = [
     "LivestreamConfig",
     "AdminConfig",
     "RemoteConfig",
+    "ContinuousConfig",
     "Config",
     "load_config",
 ]
@@ -51,6 +53,24 @@ class CameraConfig(BaseModel):
     rtsp_main: str
     rtsp_sub: str
     onvif_port: int = Field(default=8000, ge=1, le=65535)
+
+    motion_mask: list[list[tuple[float, float]]] | None = None
+
+    @field_validator("motion_mask")
+    @classmethod
+    def _validate_motion_mask(
+        cls, value: list[list[tuple[float, float]]] | None
+    ) -> list[list[tuple[float, float]]] | None:
+        """Each ignore polygon needs at least 3 points, all with x,y in [0, 1]."""
+        if value is None:
+            return None
+        for poly in value:
+            if len(poly) < 3:
+                raise ValueError("each motion_mask polygon needs at least 3 points")
+            for x, y in poly:
+                if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                    raise ValueError("motion_mask points must be normalised to [0, 1]")
+        return value
 
     @model_validator(mode="after")
     def _interpolate_rtsp(self) -> "CameraConfig":
@@ -221,6 +241,41 @@ class RemoteConfig(BaseModel):
     block_admin: bool = True
 
 
+class ContinuousConfig(BaseModel):
+    """Optional always-on, motion-gated detection (your model becomes the gate).
+
+    A second per-camera producer watches a cheap MOG2 motion signal on the go2rtc
+    sub restream and fires the existing capture->YOLO->gate->save pipeline on
+    motion, so the fine-tuned model (not Reolink's onboard AI) decides what counts.
+    Entirely inert when ``enabled`` is false.
+    """
+
+    enabled: bool = False
+    sample_fps: int = Field(default=4, ge=1)  # frames/sec sampled for motion
+    downscale_width: int = Field(default=480, ge=64)  # px width motion runs at
+    min_area_frac: float = Field(default=0.003, gt=0.0, lt=1.0)  # largest contour gate
+    refractory_s: float = Field(default=8.0, ge=0.0)  # min seconds between emits
+    warmup_s: float = Field(default=10.0, ge=0.0)  # suppress emits after (re)connect
+    algorithm: Literal["mog2", "frame_diff"] = "mog2"
+    active_hours: str = ""  # "HH:MM-HH:MM" local window; empty = 24/7
+
+    @field_validator("active_hours")
+    @classmethod
+    def _validate_active_hours(cls, value: str) -> str:
+        """Accept "" (24/7) or a strict "HH:MM-HH:MM" 24-hour window."""
+        value = value.strip()
+        if not value:
+            return ""
+        m = re.fullmatch(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", value)
+        if not m:
+            raise ValueError('active_hours must be "" or "HH:MM-HH:MM"')
+        sh, sm, eh, em = (int(g) for g in m.groups())
+        for hh, mm in ((sh, sm), (eh, em)):
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                raise ValueError("active_hours has an out-of-range time")
+        return value
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -236,6 +291,7 @@ class Config(BaseModel):
     livestream: LivestreamConfig = Field(default_factory=LivestreamConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
+    continuous: ContinuousConfig = Field(default_factory=ContinuousConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":

@@ -88,6 +88,7 @@ def grab_burst(
     interval_ms: int,
     stream: str,
     timeout_s: int,
+    rtsp_url: str | None = None,
 ) -> list[np.ndarray]:
     """Open the camera's RTSP stream, grab ``n`` frames, and close it.
 
@@ -104,6 +105,8 @@ def grab_burst(
         stream: ``"main"`` or ``"sub"`` — which RTSP URL to open.
         timeout_s: Overall wall-clock budget for the burst (also applied as the
             FFmpeg open/read timeout where supported).
+        rtsp_url: Optional explicit RTSP URL to open instead of the camera's
+            own main/sub URL — used to route continuous bursts through go2rtc.
 
     Returns:
         A list of BGR ``numpy.ndarray`` frames, newest-last. May be shorter than
@@ -115,7 +118,7 @@ def grab_burst(
         return []
 
     camera_id = getattr(camera, "id", "?")
-    url = _select_url(camera, stream)
+    url = rtsp_url if rtsp_url else _select_url(camera, stream)
     interval_s = max(0.0, interval_ms / 1000.0)
     deadline = time.monotonic() + max(0.0, float(timeout_s))
 
