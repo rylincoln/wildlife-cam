@@ -55,6 +55,11 @@ train = [
 autolabel = [
     "speciesnet>=5",
 ]
+# BirdNET audio bird-ID. NOTE: birdnet pulls full TensorFlow (CPU) + scipy/pandas/
+# pyarrow/soundfile/kagglehub -- a large footprint, confined to this optional extra.
+audio = [
+    "birdnet>=0.2,<0.3",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.4",
