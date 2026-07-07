@@ -11,6 +11,10 @@
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">&#128062;</span>
       <h1>Wildlife Gallery</h1>
+      <span id="liveDot" class="live-dot" hidden title="Live updates">
+        <span class="live-pip" aria-hidden="true"></span>
+        <span class="live-text">Live</span>
+      </span>
       {% if livestream_enabled or admin_enabled %}
       <nav class="nav">
         {% if livestream_enabled %}<a class="nav-link" href="{{ url_for('live') }}">Live</a>{% endif %}
@@ -79,7 +83,11 @@
       <p>No captures match these filters yet.</p>
     </div>
 
-    <section id="grid" class="grid" aria-live="polite">
+    <!-- Screen-reader announcer for live updates: a throttled summary is written
+         here so incoming captures don't announce every card's full text. -->
+    <p id="liveStatus" class="sr-only" role="status" aria-live="polite"></p>
+
+    <section id="grid" class="grid">
       {% for c in captures %}
       <article class="card"
                data-id="{{ c.id }}"
@@ -127,7 +135,8 @@
   </div>
 
   <script id="gallery-state" type="application/json">
-    {{ {"page": page, "hasMore": has_more, "pageSize": page_size} | tojson }}
+    {{ {"page": page, "hasMore": has_more, "pageSize": page_size,
+        "latestId": latest_id, "liveRefresh": live_refresh} | tojson }}
   </script>
 
   <script>
@@ -241,6 +250,81 @@
         }, { rootMargin: "600px 0px" });
         io.observe(sentinel);
       }
+
+      // ----- Live updates (Server-Sent Events) ----- //
+      // Opens a persistent stream that pushes captures created after page load
+      // (respecting the active filters, which we forward via the query string).
+      // New cards are prepended to the top of the grid with a brief highlight.
+      (function initLive() {
+        const refresh = state.liveRefresh;
+        if (!refresh || refresh <= 0 || !("EventSource" in window)) return;
+
+        const dot = document.getElementById("liveDot");
+        const liveStatus = document.getElementById("liveStatus");
+        // Seed the dedupe set from the server-rendered cards so a reconnect that
+        // replays an already-shown capture (or a capture that raced the page's
+        // watermark and got both rendered and streamed) can't produce a dupe tile.
+        const seen = new Set(cards().map((c) => c.dataset.id));
+        let newestId = Number(state.latestId) || 0;
+
+        function setStatus(state_) {
+          // state_: "on" (connected), "off" (transient reconnect), "dead" (closed).
+          if (!dot) return;
+          if (state_ === "dead") { dot.hidden = true; return; }
+          dot.hidden = false;
+          dot.classList.toggle("live-on", state_ === "on");
+          dot.title = state_ === "on"
+            ? "Live updates: connected" : "Live updates: reconnecting…";
+        }
+
+        // Throttled screen-reader announcer: coalesce a burst of new captures into
+        // one "N new captures" message instead of reading every card aloud.
+        let pendingCount = 0;
+        let announceTimer = 0;
+        function announceNew() {
+          pendingCount += 1;
+          if (!liveStatus) return;
+          clearTimeout(announceTimer);
+          announceTimer = setTimeout(() => {
+            liveStatus.textContent =
+              pendingCount === 1 ? "1 new capture" : pendingCount + " new captures";
+            pendingCount = 0;
+          }, 1200);
+        }
+
+        function prependCapture(c) {
+          const id = String(c.id);
+          if (seen.has(id)) return;
+          seen.add(id);
+          const card = renderCard(c);
+          card.classList.add("card-new");
+          grid.insertBefore(card, grid.firstChild);
+          if (emptyBox) emptyBox.hidden = true;
+          // Drop the highlight once played so later DOM re-flows don't re-animate.
+          setTimeout(() => card.classList.remove("card-new"), 2200);
+          if (Number(c.id) > newestId) newestId = Number(c.id);
+          announceNew();
+        }
+
+        // Forward the current filters (and remote-access ?key=, if any). `since`
+        // is the initial watermark; reconnects resume via the Last-Event-ID header.
+        const params = new URLSearchParams(window.location.search);
+        params.set("since", newestId);
+        const es = new EventSource("/api/stream?" + params.toString());
+        es.addEventListener("open", () => setStatus("on"));
+        es.addEventListener("error", () => {
+          // EventSource auto-reconnects on a transient drop (readyState CONNECTING)
+          // but gives up permanently on an HTTP error / bad content-type (CLOSED),
+          // e.g. live disabled mid-session. Don't imply a reconnect that won't come.
+          setStatus(es.readyState === EventSource.CLOSED ? "dead" : "off");
+        });
+        es.addEventListener("capture", (ev) => {
+          let c;
+          try { c = JSON.parse(ev.data); } catch (_) { return; }
+          prependCapture(c);
+        });
+        window.addEventListener("beforeunload", () => es.close());
+      })();
 
       // ----- Lightbox ----- //
       const lb = document.getElementById("lightbox");

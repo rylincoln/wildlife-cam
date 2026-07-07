@@ -782,3 +782,78 @@ def test_audio_path_migrates_onto_a_legacy_db(tmp_path):
     cols = {r["name"] for r in store._conn.execute("PRAGMA table_info(captures)")}
     assert "audio_path" in cols
     store.close()
+
+
+def test_max_id_empty_and_populated(tmp_path: Path) -> None:
+    """max_id() is 0 on an empty DB and tracks the highest inserted row id."""
+    store = _new_store(tmp_path)
+    try:
+        assert store.max_id() == 0
+        base = datetime(2026, 6, 28, 8, 0, 0)
+        cid1 = store.save_capture(
+            camera_id="north_field", event_ts=base, capture_ts=base,
+            frame=_make_frame(), det=_det("bird", 0.9),
+        )
+        assert store.max_id() == cid1
+        cid2 = store.save_capture(
+            camera_id="south_trail", event_ts=base,
+            capture_ts=datetime(2026, 6, 28, 8, 1, 0),
+            frame=_make_frame(), det=_det("dog", 0.8),
+        )
+        assert store.max_id() == cid2 == max(cid1, cid2)
+    finally:
+        store.close()
+
+
+def test_query_since_returns_only_newer_rows_ascending(tmp_path: Path) -> None:
+    """query_since(last_id) yields id>last_id, oldest-first (for top-prepend)."""
+    store = _new_store(tmp_path)
+    try:
+        base = datetime(2026, 6, 28, 8, 0, 0)
+        ids = [
+            store.save_capture(
+                camera_id="north_field", event_ts=base,
+                capture_ts=datetime(2026, 6, 28, 8, i, 0),
+                frame=_make_frame(), det=_det("bird", 0.9),
+            )
+            for i in range(3)
+        ]
+        # Everything newer than the first id -> the last two, ascending.
+        newer = store.query_since(ids[0])
+        assert [r["id"] for r in newer] == [ids[1], ids[2]]
+        # Newer than the max id -> empty.
+        assert store.query_since(ids[-1]) == []
+        # Watermark 0 -> all rows.
+        assert [r["id"] for r in store.query_since(0)] == ids
+    finally:
+        store.close()
+
+
+def test_query_since_honours_filters(tmp_path: Path) -> None:
+    """query_since applies the same AND-combined filters as query()."""
+    store = _new_store(tmp_path)
+    try:
+        base = datetime(2026, 6, 28, 8, 0, 0)
+        store.save_capture(
+            camera_id="north_field", event_ts=base, capture_ts=base,
+            frame=_make_frame(), det=_det("bird", 0.9),
+        )
+        dog_id = store.save_capture(
+            camera_id="south_trail", event_ts=base,
+            capture_ts=datetime(2026, 6, 28, 8, 1, 0),
+            frame=_make_frame(), det=_det("dog", 0.6),
+        )
+        bird2_id = store.save_capture(
+            camera_id="north_field", event_ts=base,
+            capture_ts=datetime(2026, 6, 28, 8, 2, 0),
+            frame=_make_frame(), det=_det("bird", 0.95),
+        )
+        # From watermark 0, filter to the north_field birds only.
+        birds = store.query_since(0, camera_id="north_field", label="bird")
+        got = [r["id"] for r in birds]
+        assert dog_id not in got
+        assert bird2_id in got
+        # A source_kind filter that matches nothing yields nothing.
+        assert store.query_since(0, source_kind="audio") == []
+    finally:
+        store.close()

@@ -163,6 +163,13 @@ class GalleryConfig(BaseModel):
     host: str
     port: int = Field(ge=1, le=65535)
     page_size: int = Field(ge=1)
+    # Live updates: the gallery holds an SSE connection and pushes new captures
+    # to open browsers, polling the DB this often (seconds). 0 disables the
+    # stream entirely (falls back to manual reload / infinite scroll).
+    live_refresh_seconds: float = Field(default=3.0, ge=0)
+    # Ceiling on simultaneous live-update streams. Each parks a worker thread and
+    # a SQLite connection for its lifetime; beyond this, /api/stream returns 503.
+    max_live_streams: int = Field(default=12, ge=1)
 
 
 class ResourceGuardConfig(BaseModel):

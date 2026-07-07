@@ -62,6 +62,8 @@ gallery:
   host: "0.0.0.0" # bind to LAN
   port: 8080
   page_size: 60
+  live_refresh_seconds: 3.0 # push new captures to open browsers via SSE; 0 disables
+  max_live_streams: 12 # ceiling on simultaneous live-update connections
 
 resource_guard: # be a good co-tenant with the media server
   detect_every_nth_event: 1 # raise to skip events if GPU contention ever appears
