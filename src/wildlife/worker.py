@@ -40,6 +40,7 @@ from wildlife.capture import grab_burst
 from wildlife.config import CameraConfig, Config, load_config
 from wildlife.detect import Detector
 from wildlife.events.base import EventSource, make_event_source
+from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
 from wildlife.gate import Deduper, pick_best, select_keepers
 from wildlife.models import CameraEvent, Detection
 from wildlife.store import Store
@@ -70,6 +71,11 @@ def _now() -> datetime:
     so this is the *only* place the worker samples real time for decisions.
     """
     return datetime.now()
+
+
+def _rtsp_port(listen: str) -> int:
+    """Extract the go2rtc RTSP port from a bind string (e.g. ``":8554"``)."""
+    return int(listen.rsplit(":", 1)[-1])
 
 
 def _ensure_logging() -> None:
@@ -195,16 +201,26 @@ class _Worker:
         signal.signal(signal.SIGINT, _handler)
 
     def _start_producers(self) -> None:
-        """Launch one daemon producer thread per camera."""
+        """Launch the primary event producer per camera, plus continuous if enabled."""
+        continuous_on = self._config.continuous.enabled
         for camera in self._cameras.values():
-            thread = threading.Thread(
+            primary = threading.Thread(
                 target=self._produce,
-                args=(camera,),
+                args=(camera, self._config.event_source),
                 name=f"events-{camera.id}",
                 daemon=True,
             )
-            thread.start()
-            self._producer_threads.append(thread)
+            primary.start()
+            self._producer_threads.append(primary)
+            if continuous_on:
+                motion = threading.Thread(
+                    target=self._produce,
+                    args=(camera, "continuous_motion"),
+                    name=f"motion-{camera.id}",
+                    daemon=True,
+                )
+                motion.start()
+                self._producer_threads.append(motion)
 
     def _teardown(self) -> None:
         """Close event sources, drain the queue, and close the store."""
@@ -215,6 +231,9 @@ class _Worker:
         # stream() is unblocked. EventSource.close() is optional in the contract.
         with self._sources_lock:
             sources = list(self._sources.values())
+        # Closed sequentially, so a continuous source's close() blocking up to
+        # ~10s on a wedged cv2 read (the read timeout) means N cameras wedged at
+        # once cost worst-case ~N x 10s here -- bounded, daemon-threaded, never hangs.
         for source in sources:
             close = getattr(source, "close", None)
             if callable(close):
@@ -252,19 +271,20 @@ class _Worker:
 
     # -- producer side -----------------------------------------------------
 
-    def _produce(self, camera: CameraConfig) -> None:
-        """Stream events from one camera onto the shared queue, with reconnect.
+    def _produce(self, camera: CameraConfig, kind: str) -> None:
+        """Stream events of one ``kind`` from a camera onto the shared queue.
 
-        Each iteration (re)creates the camera's event source and forwards every
-        :class:`CameraEvent` it yields onto the queue. If the stream ends or
-        raises, we back off (capped, exponential) and reconnect -- unless a
-        shutdown has been requested, in which case we exit promptly.
+        Each iteration (re)creates the camera's event source for ``kind`` and
+        forwards every :class:`CameraEvent` it yields onto the queue, reconnecting
+        with capped exponential backoff. The source registry is keyed on
+        ``camera.id:kind`` so a camera's multiple producers (e.g. reolink +
+        continuous) never clobber each other and both are closed on teardown.
         """
         backoff = _INITIAL_BACKOFF_S
-        kind = self._config.event_source
+        source_key = f"{camera.id}:{kind}"
         while not self._shutdown.is_set():
             try:
-                source = make_event_source(kind, camera)
+                source = make_event_source(kind, camera, self._config)
             except Exception:  # noqa: BLE001 - keep the producer alive
                 logger.exception(
                     "Camera %s: failed to create event source (%s).", camera.id, kind
@@ -275,7 +295,7 @@ class _Worker:
                 continue
 
             with self._sources_lock:
-                self._sources[camera.id] = source
+                self._sources[source_key] = source
             logger.info("Camera %s: event source started (%s).", camera.id, kind)
 
             try:
@@ -388,14 +408,23 @@ class _Worker:
             )
             return
 
-        # 3) Capture a short burst from the configured stream.
+        # 3) Capture a short burst from the configured stream. Continuous-motion
+        # events route through go2rtc (avoids a second same-IP Reolink session);
+        # Reolink events keep the direct path.
         cap = self._config.capture
+        is_continuous = event.kind == CONTINUOUS_EVENT_KIND
+        if is_continuous:
+            rtsp_port = _rtsp_port(self._config.livestream.rtsp_listen)
+            burst_url = f"rtsp://127.0.0.1:{rtsp_port}/{camera_id}_{cap.stream}"
+        else:
+            burst_url = None
         frames = grab_burst(
             camera,
             cap.burst_frames,
             cap.burst_interval_ms,
             cap.stream,
             cap.rtsp_timeout_s,
+            rtsp_url=burst_url,
         )
         if not frames:
             logger.warning(
@@ -430,6 +459,7 @@ class _Worker:
                 positives.extend((frame, k) for k in keepers)
 
         # 5) Save: the single best frame, or every positive detection.
+        source_kind = "continuous" if is_continuous else "reolink"
         capture_ts = _now()
         saved_ids: list[int] = []
         if save_best_only:
@@ -441,6 +471,7 @@ class _Worker:
                         capture_ts=capture_ts,
                         frame=best_frame,
                         det=best_det,
+                        source_kind=source_kind,
                     )
                 )
         else:
@@ -452,6 +483,7 @@ class _Worker:
                         capture_ts=capture_ts,
                         frame=frame,
                         det=det,
+                        source_kind=source_kind,
                     )
                 )
 

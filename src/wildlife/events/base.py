@@ -204,13 +204,18 @@ class _QueueBackedEventSource(EventSource):
                 )
 
 
-def make_event_source(kind: str, camera: object) -> EventSource:
+def make_event_source(kind: str, camera: object, config: object = None) -> EventSource:
     """Construct the configured :class:`EventSource` for a camera.
 
     Args:
-        kind: ``"reolink_native"`` (preferred, ``reolink-aio``) or
-            ``"onvif_bridge"`` (fallback, ``onvif-zeep`` PullPoint).
+        kind: ``"reolink_native"`` (preferred, ``reolink-aio``),
+            ``"onvif_bridge"`` (fallback, ``onvif-zeep`` PullPoint), or
+            ``"continuous_motion"`` (always-on motion-gated source).
         camera: The camera's :class:`wildlife.config.CameraConfig`.
+        config: The full validated ``wildlife.config.Config``. Required by the
+            ``continuous_motion`` source (its knobs, restream port, and motion
+            mask); ignored by reolink/onvif. Defaults to ``None`` so existing
+            callers keep working.
 
     Returns:
         A ready-to-use (not yet started) :class:`EventSource`.
@@ -229,6 +234,15 @@ def make_event_source(kind: str, camera: object) -> EventSource:
         from wildlife.events.onvif_bridge import OnvifEventSource
 
         return OnvifEventSource(camera)
+    if kind == "continuous_motion":
+        if config is None:
+            raise ValueError(
+                "event_source 'continuous_motion' requires a config argument"
+            )
+        from wildlife.events.continuous_motion import ContinuousMotionEventSource
+
+        return ContinuousMotionEventSource(camera, config)
     raise ValueError(
-        f"Unknown event_source {kind!r}; expected 'reolink_native' or 'onvif_bridge'"
+        f"Unknown event_source {kind!r}; expected 'reolink_native', "
+        "'onvif_bridge', or 'continuous_motion'"
     )

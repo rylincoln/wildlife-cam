@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS captures (
     width INTEGER, height INTEGER,
     original_label TEXT,               -- model's label before a human reclassify
     reviewed       INTEGER NOT NULL DEFAULT 0,
-    reviewed_at    TEXT                -- ISO8601 of the last human action
+    reviewed_at    TEXT,               -- ISO8601 of the last human action
+    source_kind    TEXT NOT NULL DEFAULT 'reolink'  -- provenance: reolink | continuous
 );
 CREATE INDEX IF NOT EXISTS idx_capture_ts ON captures(capture_ts);
 CREATE INDEX IF NOT EXISTS idx_camera     ON captures(camera_id);
@@ -70,6 +71,7 @@ _COLUMNS: tuple[str, ...] = (
     "original_label",
     "reviewed",
     "reviewed_at",
+    "source_kind",
 )
 
 # Columns added after the original schema; applied idempotently by _migrate().
@@ -77,6 +79,7 @@ _COLUMN_ADDITIONS: tuple[tuple[str, str], ...] = (
     ("original_label", "TEXT"),
     ("reviewed", "INTEGER NOT NULL DEFAULT 0"),
     ("reviewed_at", "TEXT"),
+    ("source_kind", "TEXT NOT NULL DEFAULT 'reolink'"),
 )
 
 
@@ -298,6 +301,7 @@ class Store:
         capture_ts: datetime,
         frame: np.ndarray,
         det: Detection,
+        source_kind: str = "reolink",
     ) -> int:
         """Persist one capture: write JPEG + thumbnail and insert a metadata row.
 
@@ -381,8 +385,8 @@ class Store:
                 INSERT INTO captures (
                     camera_id, event_ts, capture_ts, label, confidence,
                     box_x1, box_y1, box_x2, box_y2,
-                    image_path, thumb_path, width, height
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    image_path, thumb_path, width, height, source_kind
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     camera_id,
@@ -398,6 +402,7 @@ class Store:
                     thumb_rel,
                     width,
                     height,
+                    source_kind,
                 ),
             )
             self._conn.commit()
