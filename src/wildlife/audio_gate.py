@@ -18,14 +18,11 @@ __all__ = ["RepeatConfirmer"]
 class RepeatConfirmer:
     """Decide when a species is *confirmed* (fire a save) and not in cooldown.
 
-    Parameters
-    ----------
-    min_confirmations:
-        Number of same-species hits required within ``confirm_window_s`` to fire.
-    confirm_window_s:
-        Trailing window (seconds) over which hits are counted.
-    cooldown_s:
-        After a fire, suppress that species for this many seconds.
+    Args:
+        min_confirmations: Number of same-species hits required within
+            ``confirm_window_s`` to fire.
+        confirm_window_s: Trailing window (seconds) over which hits are counted.
+        cooldown_s: After a fire, suppress that species for this many seconds.
     """
 
     def __init__(
@@ -46,8 +43,7 @@ class RepeatConfirmer:
         hits = self._hits[species]
         hits.append(now)
         # Evict hits older than the trailing window.
-        cutoff = now
-        while hits and (cutoff - hits[0]).total_seconds() > self._window_s:
+        while hits and (now - hits[0]).total_seconds() > self._window_s:
             hits.popleft()
 
         if len(hits) >= self._min:
