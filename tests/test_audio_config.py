@@ -59,3 +59,17 @@ def test_config_without_audio_block_still_validates():
 
     cfg = Config.model_validate(_minimal_config_dict())
     assert cfg.audio.enabled is False
+
+
+def test_boundary_values_accepted():
+    assert AudioConfig(confidence_threshold=0.0).confidence_threshold == 0.0
+    assert AudioConfig(confidence_threshold=1.0).confidence_threshold == 1.0
+    ok = AudioConfig(use_geo_filter=True, latitude=90.0, longitude=-180.0)
+    assert ok.latitude == 90.0 and ok.longitude == -180.0
+    assert AudioConfig(active_hours="22:00-06:00").active_hours == "22:00-06:00"
+
+
+def test_disabled_config_may_omit_coords_even_with_geo_on():
+    # coords are required only when audio is ENABLED with geo on; an inert config may omit them
+    a = AudioConfig(enabled=False, use_geo_filter=True)
+    assert a.enabled is False and a.latitude is None

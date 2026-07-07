@@ -315,11 +315,17 @@ class AudioConfig(BaseModel):
 
     @model_validator(mode="after")
     def _geo_needs_coords(self) -> "AudioConfig":
-        """When geo filtering is on and enabled, latitude/longitude are required and ranged."""
+        """Require lat/lon only when the geo filter is ACTIVE (enabled + use_geo_filter).
+
+        An inert config (``enabled: false``) may leave coordinates unset even with
+        ``use_geo_filter`` on — so the default ``AudioConfig()`` (geo on, no coords)
+        stays constructible and ``Config`` can default-construct it. Range checks below
+        apply whenever coordinates ARE set, regardless of enabled/use_geo_filter.
+        """
         if self.enabled and self.use_geo_filter:
             if self.latitude is None or self.longitude is None:
                 raise ValueError(
-                    "use_geo_filter=true requires latitude and longitude"
+                    "audio.use_geo_filter requires latitude and longitude when enabled"
                 )
         if self.latitude is not None and not (-90.0 <= self.latitude <= 90.0):
             raise ValueError("latitude must be in [-90, 90]")
