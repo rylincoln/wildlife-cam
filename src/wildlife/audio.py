@@ -8,8 +8,12 @@ keeping the pure spectrogram tests hardware-free.
 
 from __future__ import annotations
 
+import glob
 import logging
+import os
+import tempfile
 import threading
+import time
 from datetime import datetime
 
 import numpy as np
@@ -73,6 +77,53 @@ def _week_of_year(now: datetime) -> int:
     return (now.month - 1) * 4 + min(4, (now.day - 1) // 7 + 1)
 
 
+# birdnet 0.2.16 leaks one mp.Queue (2 pipe FDs + 3 semaphores) + a feeder thread +
+# ~12 loggers on EVERY predict_arrays call: it attaches a QueueHandler to a uniquely
+# named "birdnet.session_<id>" logger and never removes it in the main process (macOS
+# spawn), so logging's registry pins it forever. Unreversed, the worker climbs to
+# "OSError: Too many open files" within hours. We undo it after each analyze().
+_TMP_SWEEP_INTERVAL_S = 60.0
+_last_tmp_sweep = [0.0]  # module-level throttle for the tempdir sweep (monotonic s)
+
+
+def _purge_birdnet_session_loggers() -> None:
+    """Drop birdnet's per-call session loggers/queues; sweep its per-call temp logs."""
+    mgr = logging.Logger.manager
+    stale = [n for n in list(mgr.loggerDict)
+             if n.startswith(("birdnet.session_", "birdnet_file_writer.session_"))]
+    for name in stale:
+        lg = mgr.loggerDict.pop(name, None)
+        if not isinstance(lg, logging.Logger):
+            continue
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
+            q = getattr(h, "queue", None)
+            if q is not None and hasattr(q, "close"):
+                try:
+                    q.close()
+                    q.join_thread()  # stop + reap the queue's feeder thread
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001
+                pass
+    # birdnet also writes one <tempdir>/birdnet_session_<id>.log per call and never
+    # removes it (a disk-inode leak). Sweep age-gated (>30s, never an in-flight file)
+    # and throttled (a tempdir glob isn't worth doing every 1.5s).
+    now = time.monotonic()
+    if now - _last_tmp_sweep[0] < _TMP_SWEEP_INTERVAL_S:
+        return
+    _last_tmp_sweep[0] = now
+    cutoff = time.time() - 30.0
+    for f in glob.glob(os.path.join(tempfile.gettempdir(), "birdnet_session_*.log")):
+        try:
+            if os.path.getmtime(f) < cutoff:
+                os.unlink(f)
+        except OSError:
+            pass
+
+
 class AudioAnalyzer:
     """Shared, thread-safe BirdNET wrapper. Loads the models once; ``analyze`` a window.
 
@@ -84,15 +135,36 @@ class AudioAnalyzer:
         import birdnet  # lazy: pulls TensorFlow
 
         self._cfg = cfg
+        self._birdnet = birdnet
         self._lock = threading.Lock()
         self._acoustic = birdnet.load("acoustic", "2.4", "tf")
         self._species_list: list[str] | None = None
+        self._shortlist_week: int | None = None
         if getattr(cfg, "use_geo_filter", False):
-            self._species_list = self._build_geo_shortlist(birdnet, cfg)
+            self._refresh_geo(datetime.now())
         logger.info(
             "AudioAnalyzer ready (geo_filter=%s, species_shortlist=%s).",
             getattr(cfg, "use_geo_filter", False),
             "-" if self._species_list is None else len(self._species_list),
+        )
+
+    def _refresh_geo(self, now: datetime) -> None:
+        """(Re)build the geo shortlist when the BirdNET week rolls over.
+
+        The occurrence shortlist is season-dependent, so a worker left running for
+        weeks/months would otherwise keep its startup week's species forever and
+        silently filter out newly-arrived migrants. Cheap: the week check runs per
+        window, but a rebuild happens ~once a week. The (possibly failed) week is
+        recorded either way so a transient geo-model error doesn't retry every 1.5s.
+        """
+        week = _week_of_year(now)
+        if week == self._shortlist_week:
+            return
+        self._species_list = self._build_geo_shortlist(self._birdnet, self._cfg)
+        self._shortlist_week = week
+        logger.info(
+            "Geo shortlist refreshed for week %d (%s species).",
+            week, "-" if self._species_list is None else len(self._species_list),
         )
 
     def _build_geo_shortlist(self, birdnet, cfg) -> list[str] | None:
@@ -111,6 +183,8 @@ class AudioAnalyzer:
         """Return ``[(common_name, confidence), …]`` for a 48kHz mono float32 window."""
         cfg = self._cfg
         with self._lock:
+            if getattr(cfg, "use_geo_filter", False):
+                self._refresh_geo(datetime.now())  # rebuild ~weekly so the shortlist tracks the season
             result = self._acoustic.predict_arrays(
                 (np.asarray(pcm, dtype=np.float32), _SAMPLE_RATE),
                 top_k=_TOP_K,
@@ -118,6 +192,7 @@ class AudioAnalyzer:
                 bandpass_fmin=cfg.bandpass_fmin,
                 custom_species_list=self._species_list,
             )
+        _purge_birdnet_session_loggers()  # reclaim birdnet 0.2.16's per-call FD/thread/logger leak
         arr = result.to_structured_array()
         out: list[tuple[str, float]] = []
         for row in arr:
