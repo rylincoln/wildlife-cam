@@ -36,9 +36,11 @@ import threading
 from datetime import datetime
 from types import FrameType
 
+from wildlife.audio import AudioAnalyzer
 from wildlife.capture import grab_burst
 from wildlife.config import CameraConfig, Config, load_config
 from wildlife.detect import Detector
+from wildlife.events.audio_detection import AudioDetectionSource
 from wildlife.events.base import EventSource, make_event_source
 from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
 from wildlife.gate import Deduper, pick_best, select_keepers
@@ -113,6 +115,8 @@ class _Worker:
         self._detector: Detector | None = None
         self._store: Store | None = None
         self._deduper: Deduper | None = None
+        self._audio_analyzer: AudioAnalyzer | None = None
+        self._audio_sources: list = []
 
         # Producer bookkeeping. The source registry is touched by producer
         # threads (on reconnect) and by teardown, so guard it with a lock.
@@ -186,6 +190,17 @@ class _Worker:
             cfg.resource_guard.max_burst_per_minute,
         )
 
+        if cfg.audio.enabled:
+            try:
+                self._audio_analyzer = AudioAnalyzer(cfg.audio)
+                logger.info("Audio bird-ID enabled (BirdNET loaded).")
+            except Exception:  # noqa: BLE001 - audio must not take down the vision worker
+                logger.exception(
+                    "Audio bird-ID enabled but BirdNET failed to load (is the [audio] extra "
+                    "installed / network available for first-run weights?). Continuing without audio."
+                )
+                self._audio_analyzer = None
+
     def _install_signal_handlers(self) -> None:
         """Trip the shutdown event on SIGTERM/SIGINT (must run on main thread)."""
 
@@ -222,10 +237,24 @@ class _Worker:
                 motion.start()
                 self._producer_threads.append(motion)
 
+        if self._config.audio.enabled and self._audio_analyzer is not None:
+            for camera in self._cameras.values():
+                source = AudioDetectionSource(
+                    camera, self._config, self._audio_analyzer, self._store
+                )
+                source.start()
+                self._audio_sources.append(source)
+
     def _teardown(self) -> None:
         """Close event sources, drain the queue, and close the store."""
         logger.info("Tearing down: closing event sources and store.")
         self._shutdown.set()
+
+        for source in self._audio_sources:
+            try:
+                source.stop()
+            except Exception:  # noqa: BLE001 - cleanup must not raise
+                logger.exception("Error stopping an audio source.")
 
         # Best-effort close of every active source so any thread blocked inside
         # stream() is unblocked. EventSource.close() is optional in the contract.

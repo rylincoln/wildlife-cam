@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS captures (
     original_label TEXT,               -- model's label before a human reclassify
     reviewed       INTEGER NOT NULL DEFAULT 0,
     reviewed_at    TEXT,               -- ISO8601 of the last human action
-    source_kind    TEXT NOT NULL DEFAULT 'reolink'  -- provenance: reolink | continuous
+    source_kind    TEXT    NOT NULL DEFAULT 'reolink',  -- provenance: reolink | continuous | audio
+    audio_path     TEXT                                 -- relative clip path for source_kind='audio'
 );
 CREATE INDEX IF NOT EXISTS idx_capture_ts ON captures(capture_ts);
 CREATE INDEX IF NOT EXISTS idx_camera     ON captures(camera_id);
@@ -72,6 +73,7 @@ _COLUMNS: tuple[str, ...] = (
     "reviewed",
     "reviewed_at",
     "source_kind",
+    "audio_path",
 )
 
 # Columns added after the original schema; applied idempotently by _migrate().
@@ -80,6 +82,7 @@ _COLUMN_ADDITIONS: tuple[tuple[str, str], ...] = (
     ("reviewed", "INTEGER NOT NULL DEFAULT 0"),
     ("reviewed_at", "TEXT"),
     ("source_kind", "TEXT NOT NULL DEFAULT 'reolink'"),
+    ("audio_path", "TEXT"),
 )
 
 
@@ -196,6 +199,7 @@ def _build_filters(
     end: datetime | str | None,
     min_confidence: float | None,
     reviewed: bool | None,
+    source_kind: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     """Build the shared AND-combined WHERE clauses + params for query/count."""
     clauses: list[str] = []
@@ -218,6 +222,9 @@ def _build_filters(
     if reviewed is not None:
         clauses.append("reviewed = ?")
         params.append(1 if reviewed else 0)
+    if source_kind is not None:
+        clauses.append("source_kind = ?")
+        params.append(source_kind)
     return clauses, params
 
 
@@ -293,6 +300,37 @@ class Store:
                     raise
 
     # ------------------------------------------------------------- write path
+    def _write_image_and_thumb(
+        self, image: Image.Image, abs_dir: Path, stem: str, width: int
+    ) -> tuple[str, str]:
+        """Write ``image`` as a full JPEG + a downscaled thumbnail; return (rel, thumb_rel).
+
+        Shared by :meth:`save_capture` and :meth:`save_audio_capture` (both pass
+        an already-RGB PIL image). Guards against filename collisions within one
+        event.
+        """
+        image_abs = abs_dir / f"{stem}.jpg"
+        if image_abs.exists():
+            n = 1
+            while (abs_dir / f"{stem}-{n}.jpg").exists():
+                n += 1
+            stem = f"{stem}-{n}"
+            image_abs = abs_dir / f"{stem}.jpg"
+        thumb_abs = abs_dir / f"{stem}_thumb.jpg"
+
+        image.save(image_abs, format="JPEG", quality=self.jpeg_quality)
+        thumb = image
+        if width > self.thumbnail_px:
+            new_h = max(1, round(image.height * self.thumbnail_px / width))
+            thumb = image.resize((self.thumbnail_px, new_h), Image.LANCZOS)
+        thumb.save(thumb_abs, format="JPEG", quality=self.jpeg_quality)
+
+        rel_dir = abs_dir.relative_to(self.captures_dir)
+        return (
+            (rel_dir / f"{stem}.jpg").as_posix(),
+            (rel_dir / f"{stem}_thumb.jpg").as_posix(),
+        )
+
     def save_capture(
         self,
         *,
@@ -352,32 +390,7 @@ class Store:
             )
         )
 
-        # Final guard against any residual collision (identical box within one
-        # event): append an incrementing suffix so we never overwrite a capture.
-        image_abs = abs_dir / f"{stem}.jpg"
-        if image_abs.exists():
-            n = 1
-            while (abs_dir / f"{stem}-{n}.jpg").exists():
-                n += 1
-            stem = f"{stem}-{n}"
-            image_abs = abs_dir / f"{stem}.jpg"
-        image_name = f"{stem}.jpg"
-        thumb_name = f"{stem}_thumb.jpg"
-        thumb_abs = abs_dir / thumb_name
-
-        # Full-size JPEG.
-        image.save(image_abs, format="JPEG", quality=self.jpeg_quality)
-
-        # Thumbnail: downscale to thumbnail_px wide, preserving aspect ratio.
-        # Never upscale a small source frame.
-        thumb = image
-        if width > self.thumbnail_px:
-            new_h = max(1, round(height * self.thumbnail_px / width))
-            thumb = image.resize((self.thumbnail_px, new_h), Image.LANCZOS)
-        thumb.save(thumb_abs, format="JPEG", quality=self.jpeg_quality)
-
-        image_rel = (rel_dir / image_name).as_posix()
-        thumb_rel = (rel_dir / thumb_name).as_posix()
+        image_rel, thumb_rel = self._write_image_and_thumb(image, abs_dir, stem, width)
 
         with self._write_lock:
             cur = self._conn.execute(
@@ -418,6 +431,69 @@ class Store:
         )
         return capture_id
 
+    def save_audio_capture(
+        self,
+        *,
+        camera_id: str,
+        event_ts: datetime,
+        capture_ts: datetime,
+        species: str,
+        confidence: float,
+        spectrogram_rgb: np.ndarray,
+        clip_bytes: bytes | None,
+        source_kind: str = "audio",
+    ) -> int:
+        """Persist one audio detection: spectrogram JPEG + thumbnail + optional clip.
+
+        ``spectrogram_rgb`` is an RGB ``uint8`` image (H, W, 3). The clip (AAC/.m4a
+        bytes) is written to ``audio_path`` when given, else that column is NULL.
+        Box columns are NULL (audio has no bounding box). Returns the new row id.
+        """
+        image = Image.fromarray(np.ascontiguousarray(spectrogram_rgb), mode="RGB")
+        height, width = int(spectrogram_rgb.shape[0]), int(spectrogram_rgb.shape[1])
+
+        rel_dir = Path(
+            f"{capture_ts.year:04d}", f"{capture_ts.month:02d}", f"{capture_ts.day:02d}"
+        )
+        abs_dir = self.captures_dir / rel_dir
+        abs_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_compact = capture_ts.strftime("%Y%m%dT%H%M%S_%f")
+        stem = "_".join(
+            (_sanitize(camera_id), ts_compact, _sanitize(species), f"{confidence:.2f}", "audio")
+        )
+        image_rel, thumb_rel = self._write_image_and_thumb(image, abs_dir, stem, width)
+
+        audio_rel: str | None = None
+        if clip_bytes is not None:
+            # Reuse the (collision-resolved) image stem so the clip sits beside it.
+            clip_stem = Path(image_rel).stem
+            clip_abs = abs_dir / f"{clip_stem}.m4a"
+            clip_abs.write_bytes(clip_bytes)
+            audio_rel = (rel_dir / f"{clip_stem}.m4a").as_posix()
+
+        with self._write_lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO captures (
+                    camera_id, event_ts, capture_ts, label, confidence,
+                    image_path, thumb_path, width, height, source_kind, audio_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    camera_id, _iso(event_ts), _iso(capture_ts), species, float(confidence),
+                    image_rel, thumb_rel, width, height, source_kind, audio_rel,
+                ),
+            )
+            self._conn.commit()
+            capture_id = int(cur.lastrowid)
+
+        logger.info(
+            "Saved audio capture id=%d camera=%s species=%s conf=%.3f clip=%s",
+            capture_id, camera_id, species, confidence, audio_rel or "-",
+        )
+        return capture_id
+
     # -------------------------------------------------------------- read path
     def get(self, capture_id: int) -> dict[str, Any] | None:
         """Return the row for ``capture_id`` as a dict, or None if absent."""
@@ -435,19 +511,21 @@ class Store:
         end: datetime | str | None = None,
         min_confidence: float | None = None,
         reviewed: bool | None = None,
+        source_kind: str | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return matching rows as dicts, newest first.
 
         All filters are optional and AND-combined. ``start``/``end`` bound
-        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag.
+        ``capture_ts`` inclusively; ``reviewed`` filters on the human-review flag;
+        ``source_kind`` matches the provenance column exactly (e.g. ``"audio"``).
         Results are ordered by ``capture_ts`` desc (ties by ``id`` desc) and
         paginated via ``limit``/``offset``.
         """
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
-            min_confidence=min_confidence, reviewed=reviewed,
+            min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
         )
         sql = "SELECT * FROM captures"
         if clauses:
@@ -466,11 +544,12 @@ class Store:
         end: datetime | str | None = None,
         min_confidence: float | None = None,
         reviewed: bool | None = None,
+        source_kind: str | None = None,
     ) -> int:
         """Return the number of rows matching the same filters as :meth:`query`."""
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
-            min_confidence=min_confidence, reviewed=reviewed,
+            min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
         )
         sql = "SELECT COUNT(*) FROM captures"
         if clauses:
@@ -501,7 +580,7 @@ class Store:
         row = self.get(capture_id)
         if row is None:
             return False
-        rels = [row.get("image_path"), row.get("thumb_path")]
+        rels = [row.get("image_path"), row.get("thumb_path"), row.get("audio_path")]
         for rel in rels:
             _safe_unlink(self.captures_dir, rel)
         with self._write_lock:
@@ -520,11 +599,12 @@ class Store:
         for chunk in _chunked(id_list, 900):
             placeholders = ",".join("?" for _ in chunk)
             rows = self._conn.execute(
-                f"SELECT image_path, thumb_path FROM captures WHERE id IN ({placeholders})",
+                f"SELECT image_path, thumb_path, audio_path FROM captures "
+                f"WHERE id IN ({placeholders})",
                 chunk,
             ).fetchall()
             for r in rows:
-                for key in ("image_path", "thumb_path"):
+                for key in ("image_path", "thumb_path", "audio_path"):
                     _safe_unlink(self.captures_dir, r[key])
                     if r[key]:
                         swept.append(r[key])

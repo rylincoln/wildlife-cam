@@ -664,3 +664,14 @@ body.admin { padding-bottom: 60px; }
 .card.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
 #bulk-status { margin-bottom: 12px; }
 .pager { display: flex; align-items: center; gap: 12px; margin: 18px 0; }
+
+/* --- Audio: kind badge + spectrogram-player lightbox --- */
+.kind-badge { margin-left: auto; opacity: .8; }
+.lb-spec { position: relative; display: inline-block; max-width: 100%; }
+#lbSpec[hidden], #lbImg[hidden], #lbAudio[hidden] { display: none; }
+.lb-spec img { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
+.lb-spec .playhead {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 1px;
+  background: #fff; box-shadow: 0 0 3px #fff; will-change: transform; pointer-events: none;
+}
+#lbAudio { width: 100%; margin-top: .5rem; }
