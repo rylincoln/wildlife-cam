@@ -99,3 +99,16 @@ continuous: # optional always-on motion-gated detection (your model becomes the 
   warmup_s: 10 # suppress emits this long after (re)connect while MOG2 stabilizes
   algorithm: mog2 # mog2 | frame_diff
   active_hours: "" # optional "HH:MM-HH:MM" local window; empty = 24/7
+
+audio: # optional BirdNET audio bird-ID (CPU-side; needs the go2rtc daemon + camera audio)
+  enabled: false # set true to run a per-camera BirdNET analyzer
+  stream: sub # sub | main — which go2rtc restream carries the mic (some Reolink only on main)
+  latitude: 37.2 # rounded placeholder — put your real coordinates in config.yaml
+  longitude: -107.5
+  use_geo_filter: true # restrict to species plausible at your location/season
+  confidence_threshold: 0.25 # BirdNET score gate; raise to cut wind/noise
+  bandpass_fmin: 0 # Hz; raise (e.g. 300) to band-limit low-frequency wind
+  min_confirmations: 2 # same species N times within confirm_window_s before saving
+  confirm_window_s: 15
+  cooldown_s: 30 # per-species suppression after a save
+  active_hours: "" # optional "HH:MM-HH:MM" local; empty = 24/7
