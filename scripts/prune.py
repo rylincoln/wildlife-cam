@@ -155,7 +155,7 @@ def main() -> int:
         where, params = _build_where(cutoff_iso, min_conf, _has_reviewed_column(conn))
 
         rows = conn.execute(
-            f"SELECT id, image_path, thumb_path, capture_ts, confidence "
+            f"SELECT id, image_path, thumb_path, audio_path, capture_ts, confidence "
             f"FROM captures WHERE {where} ORDER BY capture_ts",
             params,
         ).fetchall()
@@ -181,7 +181,7 @@ def main() -> int:
                 row["capture_ts"],
                 row["confidence"],
             )
-            for rel in (row["image_path"], row["thumb_path"]):
+            for rel in (row["image_path"], row["thumb_path"], row["audio_path"]):
                 if args.dry_run:
                     # Still account for what we'd remove, without unlinking.
                     target = (captures_dir / rel) if rel else None

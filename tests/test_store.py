@@ -525,6 +525,50 @@ def test_delete_many_removes_files(tmp_path: Path) -> None:
         store.close()
 
 
+def test_delete_removes_audio_clip(tmp_path: Path) -> None:
+    store = Store(tmp_path / "c.db", tmp_path / "caps")
+    store.init_schema()
+    try:
+        cid = store.save_audio_capture(
+            camera_id="cam1",
+            event_ts=datetime(2026, 7, 6, 6, 0, 0),
+            capture_ts=datetime(2026, 7, 6, 6, 0, 1),
+            species="American Robin",
+            confidence=0.8,
+            spectrogram_rgb=np.zeros((32, 64, 3), np.uint8),
+            clip_bytes=b"\x00\x01\x02",
+        )
+        clip = store.captures_dir / store.get(cid)["audio_path"]
+        assert clip.is_file()
+        assert store.delete(cid) is True
+        assert not clip.exists()  # clip removed, not orphaned
+    finally:
+        store.close()
+
+
+def test_delete_many_removes_audio_clips(tmp_path: Path) -> None:
+    store = Store(tmp_path / "c.db", tmp_path / "caps")
+    store.init_schema()
+    try:
+        ids, clips = [], []
+        for i in range(2):
+            cid = store.save_audio_capture(
+                camera_id="cam1",
+                event_ts=datetime(2026, 7, 6, 6, 0, i),
+                capture_ts=datetime(2026, 7, 6, 6, 0, i + 1),
+                species="Steller's Jay",
+                confidence=0.7,
+                spectrogram_rgb=np.zeros((32, 64, 3), np.uint8),
+                clip_bytes=b"\x00\x01",
+            )
+            ids.append(cid)
+            clips.append(store.captures_dir / store.get(cid)["audio_path"])
+        assert store.delete_many(ids) == 2
+        assert all(not c.exists() for c in clips)
+    finally:
+        store.close()
+
+
 def test_update_label_records_provenance_once(tmp_path: Path) -> None:
     store = _new_store(tmp_path)
     try:

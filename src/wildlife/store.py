@@ -305,8 +305,9 @@ class Store:
     ) -> tuple[str, str]:
         """Write ``image`` as a full JPEG + a downscaled thumbnail; return (rel, thumb_rel).
 
-        Shared by :meth:`save_capture` (BGR frames) and :meth:`save_audio_capture`
-        (RGB spectrograms). Guards against filename collisions within one event.
+        Shared by :meth:`save_capture` and :meth:`save_audio_capture` (both pass
+        an already-RGB PIL image). Guards against filename collisions within one
+        event.
         """
         image_abs = abs_dir / f"{stem}.jpg"
         if image_abs.exists():
@@ -579,7 +580,7 @@ class Store:
         row = self.get(capture_id)
         if row is None:
             return False
-        rels = [row.get("image_path"), row.get("thumb_path")]
+        rels = [row.get("image_path"), row.get("thumb_path"), row.get("audio_path")]
         for rel in rels:
             _safe_unlink(self.captures_dir, rel)
         with self._write_lock:
@@ -598,11 +599,12 @@ class Store:
         for chunk in _chunked(id_list, 900):
             placeholders = ",".join("?" for _ in chunk)
             rows = self._conn.execute(
-                f"SELECT image_path, thumb_path FROM captures WHERE id IN ({placeholders})",
+                f"SELECT image_path, thumb_path, audio_path FROM captures "
+                f"WHERE id IN ({placeholders})",
                 chunk,
             ).fetchall()
             for r in rows:
-                for key in ("image_path", "thumb_path"):
+                for key in ("image_path", "thumb_path", "audio_path"):
                     _safe_unlink(self.captures_dir, r[key])
                     if r[key]:
                         swept.append(r[key])
