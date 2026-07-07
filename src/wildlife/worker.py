@@ -44,6 +44,7 @@ from wildlife.events.audio_detection import AudioDetectionSource
 from wildlife.events.base import EventSource, make_event_source
 from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
 from wildlife.gate import Deduper, pick_best, select_keepers
+from wildlife.megadetector import MegaDetector, second_pass_decision
 from wildlife.models import CameraEvent, Detection
 from wildlife.store import Store
 
@@ -113,6 +114,7 @@ class _Worker:
 
         # Built in _setup() (kept None until then so failures surface early).
         self._detector: Detector | None = None
+        self._megadetector: MegaDetector | None = None
         self._store: Store | None = None
         self._deduper: Deduper | None = None
         self._audio_analyzer: AudioAnalyzer | None = None
@@ -126,6 +128,10 @@ class _Worker:
 
         # Resource-guard counter (consumer-thread-only, so no lock needed).
         self._event_count = 0
+        # Per-camera time of the last MegaDetector *rescue* inference, used to
+        # throttle the recall net independently of the save-keyed dedupe cooldown
+        # (consumer-thread-only, so no lock needed).
+        self._md_last_rescue: dict[str, datetime] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -171,6 +177,30 @@ class _Worker:
             cfg.detection.device,
             self._detector.device_in_use(),
         )
+
+        # Optional MegaDetector second pass. Load once here; a load failure must
+        # not take down the vision worker (mirrors the audio analyzer below).
+        if cfg.megadetector.enabled:
+            try:
+                self._megadetector = MegaDetector(
+                    weights_path=cfg.megadetector.weights_path,
+                    device=cfg.detection.device,
+                    confidence=cfg.megadetector.confidence,
+                    imgsz=cfg.megadetector.imgsz,
+                )
+                logger.info(
+                    "MegaDetector second pass enabled (in use=%s, classes=%s).",
+                    self._megadetector.device_in_use(),
+                    cfg.megadetector.classes,
+                )
+            except Exception:  # noqa: BLE001 - MD is a bonus; never crash the worker
+                logger.exception(
+                    "megadetector.enabled but MegaDetector failed to load "
+                    "(is weights_path=%s present and the [detect] extra installed?). "
+                    "Continuing without the second pass.",
+                    cfg.megadetector.weights_path,
+                )
+                self._megadetector = None
 
         self._store = Store(
             cfg.storage.db_path,
@@ -393,6 +423,87 @@ class _Worker:
             finally:
                 self._queue.task_done()
 
+    def _megadetector_pass(
+        self,
+        frames: list,
+        best_det: Detection | None,
+        best_frame,
+        positives: list[tuple[object, Detection]],
+        save_best_only: bool,
+        camera_id: str,
+    ) -> tuple[Detection | None, object, list[tuple[object, Detection]], str]:
+        """Run MegaDetector once on a representative frame and fold in its verdict.
+
+        Returns ``(best_det, best_frame, positives, reason)`` -- the (possibly
+        updated) result plus the MD action string ("" when nothing changed), which
+        the caller uses to log an accurate reject reason. Only spends an MD
+        inference when it could change the outcome, and never raises -- a failure
+        leaves the first-pass result untouched.
+
+        Note: ``suppress_false_positives`` and ``rescue_misses`` do not compose --
+        if suppression empties a kept event, the recall net does NOT re-run for a
+        non-overlapping animal MD may have seen (``kept`` is evaluated once). This
+        only matters when both are enabled (suppression is opt-in, default off).
+        """
+        assert self._megadetector is not None
+        mdc = self._config.megadetector
+        kept = (best_det is not None) if save_best_only else bool(positives)
+        now = _now()
+        if kept:
+            # Kept events already passed the save-keyed dedupe cooldown, so
+            # override/suppression runs are bounded; run whenever they can act.
+            run = mdc.person_override or mdc.suppress_false_positives
+        else:
+            # Rescue fires on events that never save (e.g. wind-blown vegetation),
+            # so it isn't bounded by the dedupe cooldown -- apply its own throttle.
+            run = mdc.rescue_misses and self._md_rescue_ready(camera_id, now, mdc.rescue_cooldown_s)
+        if not run:
+            return best_det, best_frame, positives, ""
+
+        # Representative frame: the winning / most-confident frame, else the middle
+        # burst frame (the rescue case, where nothing was kept).
+        if save_best_only and best_frame is not None:
+            rep = best_frame
+        elif positives:
+            rep = max(positives, key=lambda fd: fd[1].confidence)[0]
+        else:
+            rep = frames[len(frames) // 2]
+
+        if not kept:
+            # Record the rescue-run time even if it rescues nothing, so the
+            # throttle bounds the inference rate on a busy false-trigger camera.
+            self._md_last_rescue[camera_id] = now
+
+        try:
+            md_dets = self._megadetector.infer(rep)
+        except Exception:  # noqa: BLE001 - never let the bonus pass crash an event
+            logger.exception(
+                "Camera %s: MegaDetector inference failed; keeping first-pass result.",
+                camera_id,
+            )
+            return best_det, best_frame, positives, ""
+
+        best_det, best_frame, positives, reason = second_pass_decision(
+            md_dets=md_dets,
+            best_det=best_det,
+            best_frame=best_frame,
+            positives=positives,
+            representative_frame=rep,
+            save_best_only=save_best_only,
+            cfg=mdc,
+            min_area_frac=self._config.detection.min_box_area_frac,
+        )
+        if reason:
+            logger.info("Camera %s: MegaDetector %s.", camera_id, reason)
+        return best_det, best_frame, positives, reason
+
+    def _md_rescue_ready(self, camera_id: str, now: datetime, cooldown_s: float) -> bool:
+        """True if enough time has passed since this camera's last rescue MD run."""
+        if cooldown_s <= 0:
+            return True
+        last = self._md_last_rescue.get(camera_id)
+        return last is None or (now - last).total_seconds() >= cooldown_s
+
     def _handle_event(self, event: CameraEvent) -> None:
         """Run the full pipeline for one event and log the decision.
 
@@ -487,6 +598,14 @@ class _Worker:
             else:
                 positives.extend((frame, k) for k in keepers)
 
+        # 4b) Optional MegaDetector second pass (per-event, one representative
+        # frame): relabel person, rescue a missed animal, or drop a false positive.
+        md_reason = ""
+        if self._megadetector is not None:
+            best_det, best_frame, positives, md_reason = self._megadetector_pass(
+                frames, best_det, best_frame, positives, save_best_only, camera_id
+            )
+
         # 5) Save: the single best frame, or every positive detection.
         source_kind = "continuous" if is_continuous else "reolink"
         capture_ts = _now()
@@ -534,6 +653,16 @@ class _Worker:
                 saved_ids,
                 top.label if top else "?",
                 top.confidence if top else 0.0,
+                len(frames),
+                total_raw,
+            )
+        elif "suppressed" in md_reason:
+            # A detection DID pass the gate; MegaDetector dropped it. Attribute the
+            # rejection accurately so gate-threshold tuning isn't misdirected.
+            logger.info(
+                "Camera %s: REJECTED (MegaDetector %s) across %d frame(s), %d raw detection(s).",
+                camera_id,
+                md_reason,
                 len(frames),
                 total_raw,
             )

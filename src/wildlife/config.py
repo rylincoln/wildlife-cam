@@ -39,6 +39,7 @@ __all__ = [
     "RemoteConfig",
     "ContinuousConfig",
     "AudioConfig",
+    "MegadetectorConfig",
     "Config",
     "load_config",
 ]
@@ -341,6 +342,47 @@ class AudioConfig(BaseModel):
         return self
 
 
+class MegadetectorConfig(BaseModel):
+    """Optional MegaDetector v6 second pass over the species detector's output.
+
+    A per-EVENT pass on one representative burst frame (bounded GPU cost) that can
+    relabel a mis-typed detection to ``person``, rescue an animal the species model
+    missed, and/or drop a false positive. Inert when ``enabled`` is false. See
+    :mod:`wildlife.megadetector` for the decision logic.
+    """
+
+    enabled: bool = False
+    weights_path: str = "weights/MDV6-yolov10e.pt"  # MDv6 ultralytics .pt (gitignored)
+    confidence: float = Field(default=0.2, ge=0.0, le=1.0)  # MD score floor (camera-trap default)
+    imgsz: int = Field(default=1280, ge=320, le=4096)  # MDv6 trained at 1280
+    iou_match: float = Field(default=0.45, ge=0.0, le=1.0)  # IoU to treat an MD box as "the same" box
+    # Which MD classes are actionable. Vehicle is excluded by default (no roads on
+    # these cameras); add "vehicle" for a driveway/gate camera later.
+    classes: list[str] = Field(default_factory=lambda: ["person", "animal"])
+    person_override: bool = True  # relabel a kept detection to person when MD sees one on it
+    rescue_misses: bool = True  # save an MD animal/person when the species model kept nothing
+    suppress_false_positives: bool = False  # drop a kept detection MD sees nothing behind (opt-in)
+    # Per-camera min seconds between *rescue* MD runs. The recall net fires on
+    # events the species model kept nothing on -- which never arm the save-keyed
+    # dedupe cooldown -- so a camera watching wind-blown vegetation could run MD
+    # on every motion event. This throttles ONLY the rescue path (person-override
+    # and suppression on kept events stay responsive). 0 = no throttle.
+    rescue_cooldown_s: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "MegadetectorConfig":
+        """Require weights when enabled and constrain ``classes`` to MD's vocabulary."""
+        if self.enabled and not self.weights_path:
+            raise ValueError("megadetector.weights_path is required when enabled")
+        allowed = {"animal", "person", "vehicle"}
+        bad = [c for c in self.classes if c not in allowed]
+        if bad:
+            raise ValueError(
+                f"megadetector.classes must be a subset of {sorted(allowed)}; got {bad}"
+            )
+        return self
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -358,6 +400,7 @@ class Config(BaseModel):
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     continuous: ContinuousConfig = Field(default_factory=ContinuousConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
+    megadetector: MegadetectorConfig = Field(default_factory=MegadetectorConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":
