@@ -86,7 +86,7 @@ livestream: # optional on-demand live view via a companion go2rtc binary (detect
 
 remote: # optional Cloudflare-Tunnel remote access (see README "Remote access")
   enabled: false # set by `wildlife-share-secret`; gates tunnel traffic with a shared-secret link
-  base_url: "" # your public URL, e.g. "https://cam.rlblais.org" (used to build the share link)
+  base_url: "" # your public URL, e.g. "https://cam.example.com" (used to build the share link)
   share_secret_hash: null # Werkzeug hash of the shared secret; managed by `wildlife-share-secret`
   block_admin: true # refuse /admin over the tunnel (config editing stays LAN-only)
 

@@ -12,13 +12,13 @@
 # Note: re-running rotates the share secret and invalidates previously-shared links.
 #
 # Usage:
-#   HOST=cam.rlblais.org CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
-#   HOST=cam.rlblais.org ./scripts/setup_remote.sh        # host config only; prints tunnel steps
+#   HOST=cam.example.com CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
+#   HOST=cam.example.com ./scripts/setup_remote.sh        # host config only; prints tunnel steps
 #   ./scripts/setup_remote.sh --dry-run                   # echo actions, change nothing
 #
 set -euo pipefail
 
-HOST="${HOST:-cam.rlblais.org}"
+HOST="${HOST:-cam.example.com}"
 CONFIG="${CONFIG:-config.yaml}"
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1

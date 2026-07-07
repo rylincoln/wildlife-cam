@@ -237,7 +237,7 @@ class RemoteConfig(BaseModel):
     """
 
     enabled: bool = False
-    base_url: str = ""  # canonical public URL e.g. "https://cam.rlblais.org" (share links / logs)
+    base_url: str = ""  # canonical public URL e.g. "https://cam.example.com" (share links / logs)
     share_secret_hash: str | None = None
     block_admin: bool = True
 
