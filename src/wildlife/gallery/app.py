@@ -23,20 +23,25 @@ Design notes
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+import threading
+import time as _time
 from datetime import datetime, time
 from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     abort,
     g,
     jsonify,
     render_template,
     request,
     send_file,
+    stream_with_context,
     url_for,
 )
 
@@ -47,6 +52,19 @@ from wildlife.remote import capability as _cap
 logger = logging.getLogger(__name__)
 
 _DATE_FMT = "%Y-%m-%d"
+
+# Live-update stream tuning.
+#
+# _STREAM_MAX_SECONDS caps a single SSE connection's lifetime. The client's
+# EventSource transparently reconnects (resuming from Last-Event-ID, so no
+# captures are missed), which (a) re-runs the remote-access gate so disabling
+# remote access / rotating the share secret takes effect within this window
+# rather than living forever on an already-open stream, and (b) periodically
+# frees the browser's per-host HTTP/1.1 connection slot the stream occupies.
+_STREAM_MAX_SECONDS = 300
+# SQLite stores signed 64-bit integers; a resume watermark beyond this can't be
+# bound as a parameter (raises OverflowError), so we treat it as "from now".
+_STREAM_ID_MAX = 2**63 - 1
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +158,11 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     storage = config.storage
     captures_dir = Path(storage.captures_dir).resolve()
     page_size = config.gallery.page_size
+
+    # Bound concurrent live streams: each holds a worker thread + its own SQLite
+    # connection for the connection's lifetime, so cap them to protect the box
+    # (and the LAN browsing experience) from a runaway/abusive client.
+    _stream_slots = threading.BoundedSemaphore(config.gallery.max_live_streams)
 
     app.config.update(
         WILDLIFE_CONFIG=config,
@@ -376,8 +399,14 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         """Render the server-side thumbnail grid plus filter controls."""
         filters = _parse_filters(request.args)
         page = _parse_page(request.args.get("page"))
-        captures, has_more = _query_page(filters, page)
         store = get_store()
+        # Read the live-update watermark BEFORE the page query. If the worker
+        # commits a capture between the two reads (separate WAL snapshots), taking
+        # the watermark first means that row is at most delivered twice (rendered
+        # *and* streamed, which the client's dedupe set collapses) rather than
+        # missed by both the page and the id>watermark stream.
+        latest_id = store.max_id()
+        captures, has_more = _query_page(filters, page)
         return render_template(
             "index.html",
             captures=captures,
@@ -387,6 +416,10 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             page=page,
             page_size=page_size,
             has_more=has_more,
+            # Live-update watermark + cadence: the front-end opens an SSE stream
+            # from latest_id so only captures created after this render arrive.
+            latest_id=latest_id,
+            live_refresh=get_config().gallery.live_refresh_seconds,
             livestream_enabled=get_config().livestream.enabled,
             admin_enabled=bool(config_path) and get_config().admin.enabled,
         )
@@ -406,6 +439,79 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
                 "captures": captures,
             }
         )
+
+    @app.route("/api/stream")
+    def api_stream():
+        """Server-Sent Events stream of newly-saved captures matching the filters.
+
+        The gallery and the worker are separate processes sharing the SQLite DB,
+        so there is no in-process signal when a capture lands. This endpoint
+        cheaply polls ``query_since`` on a short cadence and pushes each new row
+        to the browser as an ``event: capture`` SSE message. Reconnects resume
+        from the standard ``Last-Event-ID`` header (falling back to ``?since=``),
+        so no captures are missed or duplicated across a dropped connection.
+        """
+        interval = get_config().gallery.live_refresh_seconds
+        if not interval or interval <= 0:
+            abort(404)  # live updates disabled by config
+        filters = _parse_filters(request.args)
+        # Resume watermark: Last-Event-ID (set by the browser on auto-reconnect)
+        # wins over the initial ?since= the page opened with.
+        resume = request.headers.get("Last-Event-ID")
+        since_raw = resume if resume is not None else request.args.get("since")
+
+        # Reserve a stream slot before we start; if the cap is hit, refuse rather
+        # than pile on another parked thread + connection.
+        if not _stream_slots.acquire(blocking=False):
+            logger.warning("Refusing SSE stream: max_live_streams reached")
+            abort(503)
+
+        def gen():
+            store = _new_store()
+            try:
+                try:
+                    last_id = int(since_raw)
+                except (TypeError, ValueError):
+                    last_id = store.max_id()
+                # Guard the watermark: negatives would replay the whole table and
+                # values past SQLite's 64-bit range would raise binding an int, so
+                # anything out of range collapses to "stream from now".
+                if last_id < 0 or last_id > _STREAM_ID_MAX:
+                    last_id = store.max_id()
+                # Advise the browser's reconnect backoff to match our poll cadence.
+                yield f"retry: {int(interval * 1000)}\n\n"
+                elapsed = 0.0
+                while elapsed < _STREAM_MAX_SECONDS:
+                    rows = store.query_since(
+                        last_id,
+                        camera_id=filters["camera"],
+                        label=filters["label"],
+                        start=filters["start"],
+                        end=filters["end"],
+                        min_confidence=filters["min_confidence"],
+                        source_kind=filters["source_kind"],
+                    )
+                    for row in rows:
+                        last_id = row["id"]
+                        payload = json.dumps(_serialize(row))
+                        yield f"id: {last_id}\nevent: capture\ndata: {payload}\n\n"
+                    if not rows:
+                        # Heartbeat comment: keeps intermediaries from idling the
+                        # connection closed and surfaces client disconnects (the
+                        # write raises) so the finally can free the DB handle.
+                        yield ": ping\n\n"
+                    _time.sleep(interval)
+                    elapsed += interval
+                # Lifetime cap reached: fall through so the client reconnects
+                # (resuming from Last-Event-ID) with a freshly re-gated request.
+            finally:
+                store.close()
+                _stream_slots.release()
+
+        resp = Response(stream_with_context(gen()), mimetype="text/event-stream")
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"  # don't let nginx/cloudflared buffer
+        return resp
 
     @app.route("/image/<int:capture_id>")
     def image(capture_id: int):

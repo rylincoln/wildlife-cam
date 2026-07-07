@@ -502,6 +502,50 @@ class Store:
         ).fetchone()
         return self._row_to_dict(row) if row is not None else None
 
+    def max_id(self) -> int:
+        """Return the highest capture id currently stored (``0`` if empty).
+
+        Used by the gallery's live-update stream as the starting watermark: the
+        SSE endpoint only pushes rows with a strictly greater id, so callers
+        capture this at page-render time to mean "anything created after now".
+        """
+        row = self._conn.execute("SELECT MAX(id) FROM captures").fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def query_since(
+        self,
+        last_id: int,
+        *,
+        camera_id: str | None = None,
+        label: str | None = None,
+        start: datetime | str | None = None,
+        end: datetime | str | None = None,
+        min_confidence: float | None = None,
+        reviewed: bool | None = None,
+        source_kind: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return rows newer than ``last_id`` (by primary key), oldest first.
+
+        The autoincrement id is a monotonic insertion marker, so ``id > last_id``
+        is a robust "new captures" predicate (unlike ``capture_ts``, which can
+        arrive slightly out of order). Filters mirror :meth:`query` and are
+        AND-combined so the live stream honours the gallery's active filter set.
+        Ordered id-ascending so a client prepending each row in turn ends up with
+        the newest on top; ``limit`` caps a single catch-up batch.
+        """
+        clauses, params = _build_filters(
+            camera_id=camera_id, label=label, start=start, end=end,
+            min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
+        )
+        clauses.append("id > ?")
+        params.append(int(last_id))
+        sql = "SELECT * FROM captures WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id ASC LIMIT ?"
+        params.append(int(limit))
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
     def query(
         self,
         *,
