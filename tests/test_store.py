@@ -664,3 +664,77 @@ def test_source_kind_migrates_onto_a_legacy_db(tmp_path: Path) -> None:
         assert rows[0]["source_kind"] == "reolink"
     finally:
         store.close()
+
+
+def test_save_audio_capture_round_trips(tmp_path):
+    import numpy as np
+    from datetime import datetime
+    from wildlife.store import Store
+
+    store = Store(tmp_path / "c.db", tmp_path / "caps")
+    store.init_schema()
+    spec = np.zeros((64, 200, 3), dtype=np.uint8)  # RGB spectrogram
+    cid = store.save_audio_capture(
+        camera_id="cam1",
+        event_ts=datetime(2026, 7, 6, 6, 0, 0),
+        capture_ts=datetime(2026, 7, 6, 6, 0, 1),
+        species="American Robin",
+        confidence=0.82,
+        spectrogram_rgb=spec,
+        clip_bytes=b"\x00\x01\x02\x03",
+    )
+    row = store.get(cid)
+    assert row["source_kind"] == "audio"
+    assert row["label"] == "American Robin"
+    assert row["confidence"] == pytest.approx(0.82)
+    assert row["box_x1"] is None and row["box_x2"] is None
+    assert row["image_path"] and row["thumb_path"]
+    assert row["audio_path"] and row["audio_path"].endswith(".m4a")
+    # the clip and images actually exist on disk
+    assert (store.captures_dir / row["audio_path"]).is_file()
+    assert (store.captures_dir / row["image_path"]).is_file()
+    store.close()
+
+
+def test_save_audio_capture_without_clip_leaves_audio_path_null(tmp_path):
+    import numpy as np
+    from datetime import datetime
+    from wildlife.store import Store
+
+    store = Store(tmp_path / "c.db", tmp_path / "caps")
+    store.init_schema()
+    cid = store.save_audio_capture(
+        camera_id="cam1",
+        event_ts=datetime(2026, 7, 6, 6, 0, 0),
+        capture_ts=datetime(2026, 7, 6, 6, 0, 1),
+        species="Steller's Jay",
+        confidence=0.7,
+        spectrogram_rgb=np.zeros((64, 200, 3), dtype=np.uint8),
+        clip_bytes=None,
+    )
+    row = store.get(cid)
+    assert row["audio_path"] is None
+    assert row["image_path"]  # spectrogram still saved
+    store.close()
+
+
+def test_audio_path_migrates_onto_a_legacy_db(tmp_path):
+    import sqlite3
+    from wildlife.store import Store
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE captures ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, camera_id TEXT NOT NULL, "
+        "event_ts TEXT NOT NULL, capture_ts TEXT NOT NULL, label TEXT NOT NULL, "
+        "confidence REAL NOT NULL, box_x1 REAL, box_y1 REAL, box_x2 REAL, box_y2 REAL, "
+        "image_path TEXT NOT NULL, thumb_path TEXT NOT NULL, width INTEGER, height INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+    store = Store(db, tmp_path / "caps")
+    store.init_schema()
+    cols = {r["name"] for r in store._conn.execute("PRAGMA table_info(captures)")}
+    assert "audio_path" in cols
+    store.close()
