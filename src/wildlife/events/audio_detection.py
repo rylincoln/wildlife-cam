@@ -78,15 +78,35 @@ class AudioDetectionSource:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
-        proc = self._proc
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001 - best-effort
-                pass
+        self._cleanup_proc()
         t = self._thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+
+    def _cleanup_proc(self) -> None:
+        """Kill AND fully reap the ffmpeg child.
+
+        Just ``kill()`` leaves the stdout pipe FD open and the child a zombie until
+        GC; across many reconnects that leaks file descriptors (the worker has hit
+        ``OSError: Too many open files``). Closing stdout + ``wait()`` releases both.
+        """
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
+        try:
+            if proc.stdout is not None:
+                proc.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001 - don't hang shutdown on a stuck child
+            pass
+        self._proc = None
 
     # -- pure decision helpers (unit-tested) ------------------------------
     def _within_active_hours(self, now_wall: datetime) -> bool:
@@ -182,25 +202,23 @@ class AudioDetectionSource:
 
             ring = bytearray()
             delivered = False
-            while not self._stop.is_set():
-                hop = self._read_exact(self._proc.stdout, _HOP_BYTES)
-                if hop is None:
-                    break  # stream dropped -> reopen
-                delivered = True
-                ring += hop
-                if len(ring) >= WIN_SAMPLES * 2:
-                    window = np.frombuffer(ring[-WIN_SAMPLES * 2:], dtype="<i2")
-                    pcm = window.astype(np.float32) / 32768.0
-                    try:
-                        self._process_window(pcm, datetime.now())
-                    except Exception:  # noqa: BLE001 - one bad window mustn't kill the thread
-                        logger.exception("Camera %s: audio window error.", self._camera.id)
-                    del ring[:_HOP_BYTES]
-
             try:
-                self._proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+                while not self._stop.is_set():
+                    hop = self._read_exact(self._proc.stdout, _HOP_BYTES)
+                    if hop is None:
+                        break  # stream dropped -> reopen
+                    delivered = True
+                    ring += hop
+                    if len(ring) >= WIN_SAMPLES * 2:
+                        window = np.frombuffer(ring[-WIN_SAMPLES * 2:], dtype="<i2")
+                        pcm = window.astype(np.float32) / 32768.0
+                        try:
+                            self._process_window(pcm, datetime.now())
+                        except Exception:  # noqa: BLE001 - one bad window mustn't kill the thread
+                            logger.exception("Camera %s: audio window error.", self._camera.id)
+                        del ring[:_HOP_BYTES]
+            finally:
+                self._cleanup_proc()  # close stdout + reap even if the read loop raised
             if self._stop.is_set():
                 break
             if delivered:

@@ -92,6 +92,17 @@
     <key>ProcessType</key>
     <string>Background</string>
 
+    <!-- Raise the open-files ceiling. BirdNET/TensorFlow (the [audio] extra) keeps a
+         large FIXED FD footprint (~550: memory-mapped model/lib files + a
+         multiprocessing worker pool + POSIX semaphores), well above launchd's default
+         soft limit of 256. The worker has hit "Too many open files" after hours of
+         audio detection; give it ample headroom (hard limit is already unlimited). -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
     <!-- launchd captures stdout/stderr to these files (EDIT paths if needed). -->
     <key>StandardOutPath</key>
     <string>/Users/__USER__/wildlife/logs/detect.out.log</string>
