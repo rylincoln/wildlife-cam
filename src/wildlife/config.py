@@ -38,6 +38,7 @@ __all__ = [
     "AdminConfig",
     "RemoteConfig",
     "ContinuousConfig",
+    "AudioConfig",
     "Config",
     "load_config",
 ]
@@ -276,6 +277,63 @@ class ContinuousConfig(BaseModel):
         return value
 
 
+class AudioConfig(BaseModel):
+    """Optional BirdNET audio bird-ID (CPU-side; needs the go2rtc daemon + camera audio).
+
+    A per-camera analyzer reads the camera's audio off the go2rtc restream, runs
+    BirdNET on rolling 3-second windows, and saves confirmed detections. Inert when
+    ``enabled`` is false.
+    """
+
+    enabled: bool = False
+    stream: Literal["sub", "main"] = "sub"  # which go2rtc restream carries the mic
+    latitude: float | None = None
+    longitude: float | None = None
+    use_geo_filter: bool = True
+    confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    bandpass_fmin: int = Field(default=0, ge=0)  # Hz; raise to band-limit low-freq wind
+    min_confirmations: int = Field(default=2, ge=1)
+    confirm_window_s: float = Field(default=15.0, ge=0.0)
+    cooldown_s: float = Field(default=30.0, ge=0.0)
+    active_hours: str = ""  # optional "HH:MM-HH:MM" local; empty = 24/7
+
+    @field_validator("active_hours")
+    @classmethod
+    def _validate_active_hours(cls, value: str) -> str:
+        """Accept "" (24/7) or a strict "HH:MM-HH:MM" 24-hour window."""
+        value = value.strip()
+        if not value:
+            return ""
+        m = re.fullmatch(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", value)
+        if not m:
+            raise ValueError('active_hours must be "" or "HH:MM-HH:MM"')
+        sh, sm, eh, em = (int(g) for g in m.groups())
+        for hh, mm in ((sh, sm), (eh, em)):
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                raise ValueError("active_hours has an out-of-range time")
+        return value
+
+    @model_validator(mode="after")
+    def _geo_needs_coords(self) -> "AudioConfig":
+        """Require lat/lon only when the geo filter is ACTIVE (enabled + use_geo_filter).
+
+        An inert config (``enabled: false``) may leave coordinates unset even with
+        ``use_geo_filter`` on — so the default ``AudioConfig()`` (geo on, no coords)
+        stays constructible and ``Config`` can default-construct it. Range checks below
+        apply whenever coordinates ARE set, regardless of enabled/use_geo_filter.
+        """
+        if self.enabled and self.use_geo_filter:
+            if self.latitude is None or self.longitude is None:
+                raise ValueError(
+                    "audio.use_geo_filter requires latitude and longitude when enabled"
+                )
+        if self.latitude is not None and not (-90.0 <= self.latitude <= 90.0):
+            raise ValueError("latitude must be in [-90, 90]")
+        if self.longitude is not None and not (-180.0 <= self.longitude <= 180.0):
+            raise ValueError("longitude must be in [-180, 180]")
+        return self
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -292,6 +350,7 @@ class Config(BaseModel):
     admin: AdminConfig = Field(default_factory=AdminConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     continuous: ContinuousConfig = Field(default_factory=ContinuousConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":
