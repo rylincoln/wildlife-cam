@@ -114,3 +114,15 @@ audio: # optional BirdNET audio bird-ID (CPU-side; needs the go2rtc daemon + cam
   confirm_window_s: 15
   cooldown_s: 30 # per-species suppression after a save
   active_hours: "" # optional "HH:MM-HH:MM" local; empty = 24/7
+
+megadetector: # optional MegaDetector v6 second pass over the species detector (per-event)
+  enabled: false # set true to run the second pass (needs weights/MDV6-yolov10e.pt + the [detect] extra)
+  weights_path: "weights/MDV6-yolov10e.pt" # MDv6 ultralytics .pt (gitignored; from Zenodo)
+  confidence: 0.2 # MD detection score floor (camera-trap default)
+  imgsz: 1280 # MDv6 was trained at 1280
+  iou_match: 0.45 # IoU to treat an MD box as the same box as a species detection
+  classes: [person, animal] # actionable MD classes; add "vehicle" for a driveway/gate camera
+  person_override: true # relabel a kept detection to person when MD sees a person on it
+  rescue_misses: true # save an MD animal/person when the species model kept nothing
+  rescue_cooldown_s: 0 # per-camera min seconds between rescue MD runs; raise (e.g. 15) on a motion-heavy camera so wind-blown vegetation doesn't fire the heavy 1280px pass every event
+  suppress_false_positives: false # drop a kept detection MD sees nothing behind (opt-in; MD can miss too)
