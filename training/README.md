@@ -1,9 +1,12 @@
-# Training a SW-Colorado wildlife detector
+# Training a local wildlife detector
 
 Stock `yolov8s.pt` only knows 80 COCO classes — of local wildlife, just **bear**
-and generic **bird**. To detect mule deer, elk, cougar, coyote, fox, turkey, etc.
-you need a model *trained* on them. This directory is the offline toolchain for
-that — it produced the deployed `models/wildlife_sw_co.pt` (a 21-class `yolo11s`).
+and generic **bird**. To detect the deer, elk, foxes, big cats, turkeys, etc. of
+**your** region you need a model *trained* on them. This directory is the offline
+toolchain for that. Define your taxonomy in `species.py` — it ships a
+**southwest-Colorado set as a worked example**, and the commands below use those
+species and datasets; edit it and swap in datasets/queries for your own area.
+
 Nothing here runs in the live app; you produce a `best.pt`, copy it into `models/`,
 and point `detection.model_path` at it — no code change, because `detect.py` reads
 `model.names` and `gate.py` filters by `detection.animal_classes` (which must
