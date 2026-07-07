@@ -426,6 +426,44 @@ throttles apply to continuous events for free.
 
 ---
 
+## Audio bird-ID (optional)
+
+A second detection modality: a per-camera analyzer identifies birds by song using
+[BirdNET](https://github.com/birdnet-team/birdnet), reading the camera's audio off the
+same go2rtc restream. It runs **CPU-side** (no contention with YOLO on the GPU) and saves
+each confirmed detection as a **playable spectrogram** — a spectrogram thumbnail in the
+gallery grid; click it for the spectrogram plus an audio player with a synced playhead.
+
+**Install the extra** (heavy — pulls TensorFlow):
+
+    uv pip install -e ".[audio]"
+
+> `birdnet` brings **full TensorFlow (~1 GB)** plus scipy/pandas/pyarrow/soundfile/kagglehub.
+> It is CPU-only. On first run it downloads model weights from Kaggle Hub (needs network +
+> a writable cache once). On the 8 GB mini, watch memory alongside torch/YOLO.
+
+**Requires the go2rtc daemon** (like continuous detection) and a camera **audio track**.
+Some Reolink models only carry audio on the *main* stream — confirm with
+`ffprobe rtsp://127.0.0.1:8554/<id>_sub` and set `audio.stream: main` if `_sub` has no audio.
+Prefer selecting **AAC/16000** on the camera over G.711 8 kHz (which clips high-frequency
+calls).
+
+**Enable it** in `config.yaml` with your real coordinates (they stay in the gitignored
+`config.yaml`):
+
+    audio:
+      enabled: true
+      latitude: 37.228274
+      longitude: -107.519089
+
+**Tuning (cut wind/false positives):** `min_confirmations` + `confirm_window_s` are the
+dominant lever (wind won't reproduce the *same* species repeatedly); raise
+`confidence_threshold`; set `bandpass_fmin` (e.g. 300 Hz) to band-limit low-frequency wind;
+`use_geo_filter` trims implausible species by location/season; `active_hours` duty-cycles.
+Audio detections are tagged `source_kind = "audio"` in the DB and filterable in the gallery.
+
+---
+
 ## Running as a service (launchd)
 
 For 24/7 operation, install the worker and gallery as **LaunchDaemons** (not
