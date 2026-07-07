@@ -4,23 +4,25 @@ YOLO weights for the detection pass live here. Weight files are **gitignored**
 (`*.pt`, `*.mlpackage`, `*.onnx`) — they are downloaded or exported on the host,
 never committed.
 
-## Deployed model
+## Default (stock) model
 
-The deployed detector is **`models/wildlife_sw_co.pt`** — a fine-tuned **21-class
-southwest-Colorado species** model (`yolo11s`, val mAP50 ≈ 0.81), referenced by
-`detection.model_path` in `config.yaml`. It is **produced by the training toolchain**
-(see [`training/README.md`](../training/README.md)) and copied here by hand — it is
-*not* downloadable from Ultralytics. `detect.py` reads the class names from the model
-itself; `config.yaml` `detection.animal_classes` is the 20-species allowlist that
-survives the gate (`person` is trained but kept off it). It runs on the Mac GPU via **MPS**.
+Out of the box, `config.example.yaml` points `detection.model_path` at a stock
+**`models/yolov8s.pt`** — no manual download needed: Ultralytics **auto-downloads**
+the weights on first use (`YOLO("yolov8s.pt")`), caching them locally. `yolov8s`
+("small") is a good accuracy/speed balance on an M1 GPU, but it only knows the 80
+COCO labels — of local wildlife, just **bear** and generic **bird** (deer, elk, fox,
+mountain lion, etc. aren't COCO classes). Runs on the Mac GPU via **MPS**.
 
-### Base checkpoints (for training only)
+## Your fine-tuned model
 
-`yolov8s.pt` / `yolo11s.pt` are the stock COCO backbones the fine-tune *starts from*.
-Ultralytics **auto-downloads** these on first use (`YOLO("yolo11s.pt")`), caching them
-locally. On their own they only know the 80 COCO labels — of local wildlife, just
-**bear** and generic **bird** (deer, elk, fox, mountain lion, etc. aren't COCO
-classes) — which is exactly why the fine-tuned model above exists.
+Once you fine-tune a detector on your local species with the
+[`training/`](../training/README.md) toolchain, copy the resulting `best.pt` here
+(e.g. `models/wildlife_<region>.pt`) and point `detection.model_path` at it, with
+`detection.animal_classes` set to the trained class names (`train.py` prints the
+exact block). Swapping models needs **no code change** — `detect.py` reads the class
+names from the model itself and `gate.py` filters by `animal_classes`. Fine-tuned
+weights are produced locally and copied in by hand; they aren't downloadable from
+Ultralytics. These also run on **MPS**.
 
 ## Newer / alternative models
 
@@ -45,7 +47,7 @@ Neural Engine** (lower power, off the GPU shaders the media server may want):
 
 ```python
 from ultralytics import YOLO
-YOLO("models/wildlife_sw_co.pt").export(format="coreml")   # -> a .mlpackage
+YOLO("models/your_model.pt").export(format="coreml")   # -> a .mlpackage
 ```
 
 **This currently fails on this stack** — the installed torch (2.12) is too new for

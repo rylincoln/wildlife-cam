@@ -1,13 +1,12 @@
 # Wildlife Detection System
 
 Fully-local wildlife detection for PoE cameras, running on an Apple Silicon Mac.
-It grabs a short RTSP frame burst per detection event, runs a **fine-tuned YOLO
-species detector** on the Mac GPU (MPS), and saves **only** frames containing a
-target animal at or above a confidence threshold. The deployed model identifies
-~20 southwest-Colorado species (mule deer, elk, black bear, coyote, red/gray fox,
-mountain lion, bobcat, wild turkey, pronghorn, moose, marmot, and more) rather
-than stock COCO classes — it's produced by the [`training/`](training/README.md)
-toolchain and runs as a `.pt` on MPS.
+It grabs a short RTSP frame burst per detection event, runs a **YOLO detector** on
+the Mac GPU (MPS), and saves **only** frames containing a target animal at or above
+a confidence threshold. It works out of the box with a stock model, and the
+included [`training/`](training/README.md) toolchain lets you fine-tune a detector
+on **your own local wildlife** — the species stock models don't know — which drops
+in with no code change.
 
 Three detection paths feed the same pipeline, all optional and independent:
 
@@ -70,8 +69,8 @@ editor), `audio` (BirdNET), `train` / `autolabel` (the training toolchain).
 
 - `coreml` — **currently non-functional on this stack.** Core ML export was meant
   to target the Apple Neural Engine, but the installed torch (2.12) is too new for
-  `coremltools`, so `.export(format="coreml")` fails. The deployed detector runs
-  as a `.pt` on **MPS** instead (no Core ML needed). The `[coreml]` extra still
+  `coremltools`, so `.export(format="coreml")` fails. Detection runs as a `.pt` on
+  **MPS** instead (no Core ML needed). The `[coreml]` extra still
   exists for when the toolchain versions realign. See [`models/README.md`](models/README.md).
 
 > **Note:** the shipped `.venv` is **uv-managed** and has no `pip` binary — use
@@ -537,17 +536,17 @@ sudo pmset -a sleep 0
 
 ## Detecting local wildlife (training)
 
-The system ships pointed at a **fine-tuned southwest-Colorado species detector**
-(`models/wildlife_sw_co.pt`, a 21-class `yolo11s`, val mAP50 ≈ 0.81) rather than
-the stock 80-class COCO model — deer, elk, mountain lion, coyote, fox, turkey,
-marmot, etc. aren't COCO classes, so `detection.animal_classes` can't filter for
-what a COCO model never predicts. `detect.py` reads the class names from the model
-itself and `gate.py` keeps only detections whose label is in `animal_classes`, so
-swapping models needs **no code change** — point `detection.model_path` at a `.pt`
-and match `animal_classes`.
+The stock COCO model only names a handful of animals (bear, generic bird) and none
+of the deer, elk, foxes, big cats, and so on that fill most regions — so
+`detection.animal_classes` can't filter for what a COCO model never predicts. The
+[`training/`](training/README.md) toolchain fine-tunes a detector on **your own
+local species** and drops in with **no code change**: `detect.py` reads class names
+from the model itself and `gate.py` keeps only detections whose label is in
+`animal_classes`, so you just point `detection.model_path` at your `.pt` and match
+`animal_classes`. Define your region's taxonomy in `training/species.py` (it ships
+a southwest-Colorado set as a worked example — edit it for your area).
 
-The [`training/`](training/README.md) toolchain is how that model was built and how
-you retrain or extend it:
+The workflow:
 
 - **Bootstrap from public data** before you have your own captures — LILA
   camera-trap datasets (`download_lila.py` → `convert_lila.py`) plus an
@@ -588,9 +587,9 @@ no prune plist ships in `launchd/`, so author your own from one of the examples 
   bootstrap (LILA `download_lila`/`convert_lila` + iNaturalist `download_inat`/
   `label_boxes`) → autolabel → split → two-stage fine-tune → deploy `best.pt` on
   MPS. See [`training/README.md`](training/README.md).
-- `models/` — model weights (gitignored). The deployed `wildlife_sw_co.pt` is
-  produced by the training toolchain and copied in by hand; stock base checkpoints
-  (e.g. `yolov8s.pt`) auto-download. See [`models/README.md`](models/README.md).
+- `models/` — model weights (gitignored). Stock base checkpoints (e.g. `yolov8s.pt`)
+  auto-download; your fine-tuned `.pt` from the training toolchain is copied in by
+  hand. See [`models/README.md`](models/README.md).
 - `launchd/` — example LaunchDaemon plists (worker, gallery, go2rtc stream, reloader).
 - `docs/` — design specs and implementation plans for the larger features.
 - `tests/` — hardware-free unit tests.
@@ -606,7 +605,7 @@ This project stands on some excellent open-source work:
 - [**go2rtc**](https://github.com/AlexxIT/go2rtc) — the on-demand WebRTC/MSE
   restreamer behind the Live view, continuous motion, and audio paths.
 - [**Ultralytics YOLO**](https://github.com/ultralytics/ultralytics) — the object
-  detector framework, used both stock and for the fine-tuned SW-Colorado model.
+  detector framework, used stock and as the base for fine-tuning a local model.
 - [**BirdNET**](https://github.com/birdnet-team/birdnet) — the acoustic model
   behind the audio bird-ID feature (pulls TensorFlow via the `[audio]` extra).
 - [**MegaDetector**](https://github.com/microsoft/CameraTraps) / Pytorch-Wildlife —
@@ -632,13 +631,12 @@ This project stands on some excellent open-source work:
 This project's own source is **MIT** — see [`LICENSE`](LICENSE).
 
 > **Dependency licenses differ.** The MIT license covers only the code in this
-> repository. Notably, the `ultralytics` package is **AGPL-3.0** (not MIT), and
-> the **fine-tuned `wildlife_sw_co.pt` is derived from Ultralytics YOLO**, so the
-> same AGPL considerations apply to the deployed model — running it as a
-> network-accessible service is the AGPL trigger. The training toolchain also uses
-> SpeciesNet and MegaDetector, and the `[audio]` extra pulls TensorFlow. You are
-> responsible for complying with the licenses of the model weights, datasets, and
-> dependencies you install and distribute.
+> repository. Notably, the `ultralytics` package is **AGPL-3.0** (not MIT), and a
+> model **fine-tuned from Ultralytics YOLO** carries the same AGPL considerations —
+> running it as a network-accessible service is the AGPL trigger. The training
+> toolchain also uses SpeciesNet and MegaDetector, and the `[audio]` extra pulls
+> TensorFlow. You are responsible for complying with the licenses of the model
+> weights, datasets, and dependencies you install and distribute.
 
 ---
 
