@@ -668,6 +668,7 @@ body.admin { padding-bottom: 60px; }
 /* --- Audio: kind badge + spectrogram-player lightbox --- */
 .kind-badge { margin-left: auto; opacity: .8; }
 .lb-spec { position: relative; display: inline-block; max-width: 100%; }
+#lbSpec[hidden], #lbImg[hidden], #lbAudio[hidden] { display: none; }
 .lb-spec img { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
 .lb-spec .playhead {
   position: absolute; top: 0; bottom: 0; left: 0; width: 1px;

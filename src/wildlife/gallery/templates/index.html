@@ -295,6 +295,7 @@
         } else {
           lbSpec.hidden = true;
           lbAudio.hidden = true;
+          lbAudio.pause();
           lbAudio.removeAttribute("src");
           lbImg.hidden = false;
           lbSpinner.hidden = false;
@@ -302,6 +303,7 @@
           lbImg.onload = () => { lbSpinner.hidden = true; lbImg.classList.add("ready"); };
           lbImg.onerror = () => { lbSpinner.hidden = true; };
           lbImg.src = card.dataset.full;
+          lbImg.alt = label + " on " + cam;
         }
 
         lbCap.innerHTML =
@@ -322,6 +324,7 @@
         lbAudio.removeAttribute("src");
         lb.hidden = true;
         lbImg.removeAttribute("src");
+        lbSpecImg.removeAttribute("src");
         currentCard = null;
         document.body.classList.remove("noscroll");
       }
