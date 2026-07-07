@@ -154,7 +154,7 @@ class AudioDetectionSource:
                 ["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
                  "-f", "s16le", "-ar", str(_SAMPLE_RATE), "-ac", "1", "-i", "-",
                  "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp],
-                input=pcm16, check=True,
+                input=pcm16, check=True, timeout=15,
             )
             with open(tmp, "rb") as f:
                 return f.read()

@@ -73,3 +73,23 @@ def test_teardown_stops_audio_sources():
     w._audio_sources = [s]
     w._teardown()
     assert s.stopped is True
+
+
+def test_audio_load_failure_degrades_gracefully(monkeypatch):
+    def _boom(cfg):
+        raise RuntimeError("no [audio] extra")
+
+    monkeypatch.setattr(W, "AudioAnalyzer", _boom)
+    monkeypatch.setattr(
+        W, "Detector", lambda *a, **k: type("D", (), {"device_in_use": lambda self: "cpu"})()
+    )
+
+    class _FakeStore:
+        def init_schema(self):
+            pass
+
+    monkeypatch.setattr(W, "Store", lambda *a, **k: _FakeStore())
+
+    w = W._Worker(Config.model_validate(_config_dict(True)))
+    w._setup()  # must NOT raise
+    assert w._audio_analyzer is None

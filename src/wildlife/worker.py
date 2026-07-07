@@ -191,8 +191,15 @@ class _Worker:
         )
 
         if cfg.audio.enabled:
-            self._audio_analyzer = AudioAnalyzer(cfg.audio)
-            logger.info("Audio bird-ID enabled (BirdNET loaded).")
+            try:
+                self._audio_analyzer = AudioAnalyzer(cfg.audio)
+                logger.info("Audio bird-ID enabled (BirdNET loaded).")
+            except Exception:  # noqa: BLE001 - audio must not take down the vision worker
+                logger.exception(
+                    "Audio bird-ID enabled but BirdNET failed to load (is the [audio] extra "
+                    "installed / network available for first-run weights?). Continuing without audio."
+                )
+                self._audio_analyzer = None
 
     def _install_signal_handlers(self) -> None:
         """Trip the shutdown event on SIGTERM/SIGINT (must run on main thread)."""
