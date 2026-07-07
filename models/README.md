@@ -4,17 +4,23 @@ YOLO weights for the detection pass live here. Weight files are **gitignored**
 (`*.pt`, `*.mlpackage`, `*.onnx`) — they are downloaded or exported on the host,
 never committed.
 
-## Default model
+## Deployed model
 
-The default is **`models/yolov8s.pt`**, referenced by `detection.model_path` in
-`config.yaml`. You do not need to download it manually: Ultralytics
-**auto-downloads** the weights on first use when you load
-`YOLO("models/yolov8s.pt")` (or `YOLO("yolov8s.pt")`), caching them locally.
+The deployed detector is **`models/wildlife_sw_co.pt`** — a fine-tuned **21-class
+southwest-Colorado species** model (`yolo11s`, val mAP50 ≈ 0.81), referenced by
+`detection.model_path` in `config.yaml`. It is **produced by the training toolchain**
+(see [`training/README.md`](../training/README.md)) and copied here by hand — it is
+*not* downloadable from Ultralytics. `detect.py` reads the class names from the model
+itself; `config.yaml` `detection.animal_classes` is the 20-species allowlist that
+survives the gate (`person` is trained but kept off it). It runs on the Mac GPU via **MPS**.
 
-`yolov8s` ("small") is a good balance of accuracy and speed on an M1 GPU. It uses
-the stock 80-class COCO labels; the relevant animal classes (bird, cat, dog,
-horse, sheep, cow, bear, elephant, zebra, giraffe) are configured under
-`detection.animal_classes`.
+### Base checkpoints (for training only)
+
+`yolov8s.pt` / `yolo11s.pt` are the stock COCO backbones the fine-tune *starts from*.
+Ultralytics **auto-downloads** these on first use (`YOLO("yolo11s.pt")`), caching them
+locally. On their own they only know the 80 COCO labels — of local wildlife, just
+**bear** and generic **bird** (deer, elk, fox, mountain lion, etc. aren't COCO
+classes) — which is exactly why the fine-tuned model above exists.
 
 ## Newer / alternative models
 
@@ -28,28 +34,22 @@ Newer options worth trying:
 Larger variants (`...m`, `...l`, `...x`) trade speed for accuracy if your host
 has the headroom.
 
-> Note: deer, elk, and fox are **not** COCO classes. For local species, plan to
-> fine-tune on your own gallery captures later (see spec section 10).
+> Swapping models needs no code change — `detect.py` reads `model.names` and
+> `gate.py` filters by `detection.animal_classes`. Retrain/extend the deployed
+> model with the [`training/`](../training/README.md) toolchain.
 
-## Core ML export (optional, for the Apple Neural Engine)
+## Core ML export (currently non-functional)
 
-For lower power and better co-tenancy, you can export the model to Core ML so
-inference can run on the **ANE** instead of the GPU shaders the media server may
-want:
+The intended fast path is exporting to Core ML so inference runs on the **Apple
+Neural Engine** (lower power, off the GPU shaders the media server may want):
 
 ```python
 from ultralytics import YOLO
-
-YOLO("models/yolov8s.pt").export(format="coreml")
-# -> produces models/yolov8s.mlpackage
+YOLO("models/wildlife_sw_co.pt").export(format="coreml")   # -> a .mlpackage
 ```
 
-Install the export toolchain with the `coreml` extra:
-
-```bash
-uv pip install -e ".[coreml]"   # coremltools
-```
-
-Then set `detection.model_path` to the resulting `.mlpackage`. The default path
-stays on **MPS** for simplicity; reach for Core ML only if you observe GPU
-contention with the media server.
+**This currently fails on this stack** — the installed torch (2.12) is too new for
+`coremltools`, so `.export(format="coreml")` raises. `train.py` catches the failure
+and falls back to deploying the `.pt`. Until the torch/`coremltools` versions
+realign, the model runs as a **`.pt` on MPS** (which is what ships). The `[coreml]`
+extra (`uv pip install -e ".[coreml]"`) is kept for when export works again.
