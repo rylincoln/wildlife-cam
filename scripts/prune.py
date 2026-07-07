@@ -80,10 +80,20 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _has_column(conn: sqlite3.Connection, name: str) -> bool:
+    """True if the ``captures`` table has a column named ``name``."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(captures)")}
+    return name in cols
+
+
 def _has_reviewed_column(conn: sqlite3.Connection) -> bool:
     """True if the captures table has the ``reviewed`` column (post-migration)."""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(captures)")}
-    return "reviewed" in cols
+    return _has_column(conn, "reviewed")
+
+
+def _has_audio_path_column(conn: sqlite3.Connection) -> bool:
+    """True if the captures table has the ``audio_path`` column (post-migration)."""
+    return _has_column(conn, "audio_path")
 
 
 def _build_where(cutoff_iso: str, min_conf: float, has_reviewed: bool) -> tuple[str, list]:
@@ -154,8 +164,15 @@ def main() -> int:
         # are exempt from the confidence rule when the column is present.
         where, params = _build_where(cutoff_iso, min_conf, _has_reviewed_column(conn))
 
+        # audio_path was added by a later migration; select it only when present
+        # so prune still works against a not-yet-migrated DB.
+        has_audio_path = _has_audio_path_column(conn)
+        select_cols = "id, image_path, thumb_path, capture_ts, confidence"
+        if has_audio_path:
+            select_cols += ", audio_path"
+
         rows = conn.execute(
-            f"SELECT id, image_path, thumb_path, audio_path, capture_ts, confidence "
+            f"SELECT {select_cols} "
             f"FROM captures WHERE {where} ORDER BY capture_ts",
             params,
         ).fetchall()
@@ -181,7 +198,8 @@ def main() -> int:
                 row["capture_ts"],
                 row["confidence"],
             )
-            for rel in (row["image_path"], row["thumb_path"], row["audio_path"]):
+            audio_rel = row["audio_path"] if has_audio_path else None
+            for rel in (row["image_path"], row["thumb_path"], audio_rel):
                 if args.dry_run:
                     # Still account for what we'd remove, without unlinking.
                     target = (captures_dir / rel) if rel else None
