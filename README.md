@@ -346,7 +346,7 @@ subject to `max_age_days`, so export anything you want to keep permanently.
 
 ## Remote access (Cloudflare Tunnel)
 
-Reach the gallery + live view from anywhere at one URL (e.g. `https://cam.rlblais.org`),
+Reach the gallery + live view from anywhere at one URL (e.g. `https://cam.example.com`),
 protected by a **shared secret in the link** — no ports forwarded, home IP hidden,
 `/admin` unreachable remotely, and your LAN unchanged. Free Cloudflare plan.
 
@@ -367,22 +367,22 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create → Cloudflared → name
    it; copy the token; `sudo cloudflared service install <TOKEN>` (boot daemon).
 3. Add two **public hostnames** on that tunnel (order matters — the `/go2rtc` one first):
-   - `cam` . `rlblais.org`, **Path** `go2rtc` → HTTP `localhost:1984`
-   - `cam` . `rlblais.org`, (no path) → HTTP `localhost:8080`
-4. In `config.yaml` set `remote.base_url: "https://cam.rlblais.org"` and
+   - `cam` . `example.com`, **Path** `go2rtc` → HTTP `localhost:1984`
+   - `cam` . `example.com`, (no path) → HTTP `localhost:8080`
+4. In `config.yaml` set `remote.base_url: "https://cam.example.com"` and
    `livestream.base_path: "/go2rtc"`; regenerate go2rtc config
    (`wildlife-stream-config`) and restart go2rtc; the gallery picks up `config.yaml` changes automatically.
 5. Run `wildlife-share-secret` → note the printed **share link** and **raw secret**.
 6. Add a Cloudflare **WAF custom rule**: *Block* when the path starts with `/go2rtc` and
    the `wl_key` cookie ≠ the raw secret. (Free-plan fallback: a small Cloudflare Worker on
-   `cam.rlblais.org/go2rtc/*` that checks the `wl_key` cookie.)
+   `cam.example.com/go2rtc/*` that checks the `wl_key` cookie.)
 7. Set each camera's **sub-stream to H.264 Main/Baseline** so MSE live plays in every
    browser incl. Safari/iOS.
 8. Keep **Total TLS OFF** for the zone so `cam.` stays out of Certificate Transparency logs.
 
 ### Using / rotating
 
-- Share `https://cam.rlblais.org/?key=<secret>`; the recipient's browser stores the
+- Share `https://cam.example.com/?key=<secret>`; the recipient's browser stores the
   cookie so the key only appears once.
 - **Rotate / revoke everyone:** re-run `wildlife-share-secret` and update the WAF rule
   with the new secret. Old links stop working.

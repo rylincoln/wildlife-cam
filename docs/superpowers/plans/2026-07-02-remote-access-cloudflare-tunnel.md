@@ -4,7 +4,7 @@
 
 **Goal:** Expose the wildlife-cam gallery + live view at one Cloudflare-Tunnel hostname, protected by a single shared-secret link ("anyone with the link"), with `/admin` unreachable remotely and LAN behavior unchanged.
 
-**Architecture:** A named Cloudflare Tunnel points `cam.rlblais.org/*` at the existing Flask gallery (`localhost:8080`) and `cam.rlblais.org/go2rtc/*` at go2rtc (`localhost:1984`, served under `api.base_path=/go2rtc`). The Flask app gates its own routes on **tunnel traffic** (detected by a loopback `remote_addr`) using a shared secret passed as `?key=` then carried in a cookie; a Cloudflare WAF rule gates the `/go2rtc` path with the same cookie. Live view uses go2rtc's MSE player (WebRTC can't cross the tunnel). All new gating is inert unless `remote.enabled` is set, so existing behavior is untouched.
+**Architecture:** A named Cloudflare Tunnel points `cam.example.com/*` at the existing Flask gallery (`localhost:8080`) and `cam.example.com/go2rtc/*` at go2rtc (`localhost:1984`, served under `api.base_path=/go2rtc`). The Flask app gates its own routes on **tunnel traffic** (detected by a loopback `remote_addr`) using a shared secret passed as `?key=` then carried in a cookie; a Cloudflare WAF rule gates the `/go2rtc` path with the same cookie. Live view uses go2rtc's MSE player (WebRTC can't cross the tunnel). All new gating is inert unless `remote.enabled` is set, so existing behavior is untouched.
 
 **Tech Stack:** Python 3.12, Flask/Werkzeug (existing), pydantic v2 (existing), PyYAML (existing), `secrets` (stdlib). Config mutations reuse `wildlife.admin.config_io` (ruamel round-trip). go2rtc + cloudflared are external and configured via a runbook.
 
@@ -75,12 +75,12 @@ def test_remote_defaults_disabled() -> None:
 def test_remote_block_parses() -> None:
     data = _minimal_config_dict()
     data["remote"] = {
-        "enabled": True, "base_url": "https://cam.rlblais.org",
+        "enabled": True, "base_url": "https://cam.example.com",
         "share_secret_hash": "pbkdf2:sha256:xxx", "block_admin": True,
     }
     cfg = Config.model_validate(data)
     assert cfg.remote.enabled is True
-    assert cfg.remote.base_url == "https://cam.rlblais.org"
+    assert cfg.remote.base_url == "https://cam.example.com"
 
 
 def test_base_path_defaults_empty() -> None:
@@ -136,7 +136,7 @@ class RemoteConfig(BaseModel):
     """
 
     enabled: bool = False
-    base_url: str = ""  # canonical public URL e.g. "https://cam.rlblais.org" (share links / logs)
+    base_url: str = ""  # canonical public URL e.g. "https://cam.example.com" (share links / logs)
     share_secret_hash: str | None = None
     block_admin: bool = True
 ```
@@ -215,7 +215,7 @@ def test_cli_mints_verifiable_secret_and_prints_link(tmp_path, monkeypatch, caps
     cfgp = tmp_path / "config.yaml"
     cfgp.write_text(render_base(tmp_path), "utf-8")
     # Give it a base_url so the printed link is concrete.
-    cio.update_section(str(cfgp), "remote", {"base_url": "https://cam.rlblais.org"})
+    cio.update_section(str(cfgp), "remote", {"base_url": "https://cam.example.com"})
 
     monkeypatch.setattr("sys.argv", ["wildlife-share-secret", str(cfgp)])
     assert share_secret.main() == 0
@@ -227,7 +227,7 @@ def test_cli_mints_verifiable_secret_and_prints_link(tmp_path, monkeypatch, caps
     assert len(secret) >= 40  # token_urlsafe(32) is ~43 chars
     cfg = load_config(cfgp)
     assert check_password_hash(cfg.remote.share_secret_hash, secret)
-    assert f"https://cam.rlblais.org/?key={secret}" in out
+    assert f"https://cam.example.com/?key={secret}" in out
 
 
 def test_cli_rotation_invalidates_old(tmp_path, monkeypatch) -> None:
@@ -555,7 +555,7 @@ def _client(config: Config):
 
 
 def _enabled(hash_secret: str = _SECRET) -> RemoteConfig:
-    return RemoteConfig(enabled=True, base_url="https://cam.rlblais.org",
+    return RemoteConfig(enabled=True, base_url="https://cam.example.com",
                         share_secret_hash=generate_password_hash(hash_secret))
 
 
@@ -767,7 +767,7 @@ _LAN = {"REMOTE_ADDR": "192.168.1.50"}
 
 def _remote_config(tmp_path: Path) -> object:
     cfg = _build_config(tmp_path, livestream=LivestreamConfig(enabled=True, base_path="/go2rtc"))
-    cfg.remote = RemoteConfig(enabled=True, base_url="https://cam.rlblais.org",
+    cfg.remote = RemoteConfig(enabled=True, base_url="https://cam.example.com",
                               share_secret_hash=generate_password_hash(_SECRET))
     return cfg
 
@@ -955,7 +955,7 @@ Add a new top-level block after the `livestream:` block:
 ```yaml
 remote: # optional Cloudflare-Tunnel remote access (see README "Remote access")
   enabled: false # set by `wildlife-share-secret`; gates tunnel traffic with a shared-secret link
-  base_url: "" # your public URL, e.g. "https://cam.rlblais.org" (used to build the share link)
+  base_url: "" # your public URL, e.g. "https://cam.example.com" (used to build the share link)
   share_secret_hash: null # Werkzeug hash of the shared secret; managed by `wildlife-share-secret`
   block_admin: true # refuse /admin over the tunnel (config editing stays LAN-only)
 ```
@@ -967,7 +967,7 @@ Append a "Remote access (Cloudflare Tunnel)" section to `README.md` covering, in
 ```markdown
 ## Remote access (Cloudflare Tunnel)
 
-Reach the gallery + live view from anywhere at one URL (e.g. `https://cam.rlblais.org`),
+Reach the gallery + live view from anywhere at one URL (e.g. `https://cam.example.com`),
 protected by a **shared secret in the link** — no ports forwarded, home IP hidden,
 `/admin` unreachable remotely, and your LAN unchanged. Free Cloudflare plan.
 
@@ -983,22 +983,22 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create → Cloudflared → name
    it; copy the token; `sudo cloudflared service install <TOKEN>` (boot daemon).
 3. Add two **public hostnames** on that tunnel (order matters — the `/go2rtc` one first):
-   - `cam` . `rlblais.org`, **Path** `go2rtc` → HTTP `localhost:1984`
-   - `cam` . `rlblais.org`, (no path) → HTTP `localhost:8080`
-4. In `config.yaml` set `remote.base_url: "https://cam.rlblais.org"` and
+   - `cam` . `example.com`, **Path** `go2rtc` → HTTP `localhost:1984`
+   - `cam` . `example.com`, (no path) → HTTP `localhost:8080`
+4. In `config.yaml` set `remote.base_url: "https://cam.example.com"` and
    `livestream.base_path: "/go2rtc"`; regenerate go2rtc config
    (`wildlife-stream-config`) and restart the gallery + go2rtc.
 5. Run `wildlife-share-secret` → note the printed **share link** and **raw secret**.
 6. Add a Cloudflare **WAF custom rule**: *Block* when the path starts with `/go2rtc` and
    the `wl_key` cookie ≠ the raw secret. (Free-plan fallback: a small Cloudflare Worker on
-   `cam.rlblais.org/go2rtc/*` that checks the `wl_key` cookie.)
+   `cam.example.com/go2rtc/*` that checks the `wl_key` cookie.)
 7. Set each camera's **sub-stream to H.264 Main/Baseline** so MSE live plays in every
    browser incl. Safari/iOS.
 8. Keep **Total TLS OFF** for the zone so `cam.` stays out of Certificate Transparency logs.
 
 ### Using / rotating
 
-- Share `https://cam.rlblais.org/?key=<secret>`; the recipient's browser stores the
+- Share `https://cam.example.com/?key=<secret>`; the recipient's browser stores the
   cookie so the key only appears once.
 - **Rotate / revoke everyone:** re-run `wildlife-share-secret` and update the WAF rule
   with the new secret. Old links stop working.
@@ -1048,13 +1048,13 @@ Create `scripts/setup_remote.sh` (make it executable: `chmod +x`):
 # mint the share secret; regenerate go2rtc.yaml; restart the gallery + stream services.
 #
 # Usage:
-#   HOST=cam.rlblais.org CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
-#   HOST=cam.rlblais.org ./scripts/setup_remote.sh        # host config only; prints tunnel steps
+#   HOST=cam.example.com CF_TUNNEL_TOKEN=eyJ... ./scripts/setup_remote.sh
+#   HOST=cam.example.com ./scripts/setup_remote.sh        # host config only; prints tunnel steps
 #   ./scripts/setup_remote.sh --dry-run                   # echo actions, change nothing
 #
 set -euo pipefail
 
-HOST="${HOST:-cam.rlblais.org}"
+HOST="${HOST:-cam.example.com}"
 CONFIG="${CONFIG:-config.yaml}"
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1

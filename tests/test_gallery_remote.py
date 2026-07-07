@@ -46,7 +46,7 @@ def _client(config: Config):
 
 
 def _enabled(hash_secret: str = _SECRET) -> RemoteConfig:
-    return RemoteConfig(enabled=True, base_url="https://cam.rlblais.org",
+    return RemoteConfig(enabled=True, base_url="https://cam.example.com",
                         share_secret_hash=generate_password_hash(hash_secret))
 
 

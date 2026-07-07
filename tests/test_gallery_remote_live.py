@@ -16,7 +16,7 @@ _LAN = {"REMOTE_ADDR": "192.168.1.50"}
 
 def _remote_config(tmp_path: Path) -> object:
     cfg = _build_config(tmp_path, livestream=LivestreamConfig(enabled=True, base_path="/go2rtc"))
-    cfg.remote = RemoteConfig(enabled=True, base_url="https://cam.rlblais.org",
+    cfg.remote = RemoteConfig(enabled=True, base_url="https://cam.example.com",
                               share_secret_hash=generate_password_hash(_SECRET))
     return cfg
 

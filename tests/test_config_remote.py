@@ -38,12 +38,12 @@ def test_remote_defaults_disabled() -> None:
 def test_remote_block_parses() -> None:
     data = _minimal_config_dict()
     data["remote"] = {
-        "enabled": True, "base_url": "https://cam.rlblais.org",
+        "enabled": True, "base_url": "https://cam.example.com",
         "share_secret_hash": "pbkdf2:sha256:xxx", "block_admin": True,
     }
     cfg = Config.model_validate(data)
     assert cfg.remote.enabled is True
-    assert cfg.remote.base_url == "https://cam.rlblais.org"
+    assert cfg.remote.base_url == "https://cam.example.com"
 
 
 def test_base_path_defaults_empty() -> None:

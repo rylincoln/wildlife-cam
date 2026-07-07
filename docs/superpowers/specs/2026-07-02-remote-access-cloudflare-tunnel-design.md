@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-02
 **Status:** Draft for review (v2 — reflects the "one hostname, shared-secret link, shareable live, no admin" direction)
-**Domain:** `rlblais.org` (managed in Cloudflare; user's account)
+**Domain:** `example.com` (managed in Cloudflare; user's account)
 
 ## 1. Goal
 
@@ -43,7 +43,7 @@ Confirmed with the user:
    proxies natively on all plans. Force **`mode=mse`** for remote (leaving `webrtc,mse`
    makes the player hang on an ICE timeout first).
 2. **go2rtc supports a sub-path** via `api.base_path` (e.g. `/go2rtc`), so its player +
-   API can live at `cam.rlblais.org/go2rtc/…` behind a reverse route without breaking its
+   API can live at `cam.example.com/go2rtc/…` behind a reverse route without breaking its
    internal `/api/...` calls.
 3. **cloudflared supports path-based routing under one hostname** — multiple ingress
    rules with the same hostname and different `path`, most-specific first, catch-all last
@@ -56,8 +56,8 @@ Confirmed with the user:
 6. **Video ToS** still exists (moved into CDN terms); a tunnel hostname is always proxied.
    For a personal cam behind a secret, with occasional low-volume viewing, practical risk
    is low (worst realistic case: a per-stream interstitial, not a ban). Keep it modest.
-7. **Certificate Transparency:** first-level names like `cam.rlblais.org` stay out of CT
-   under Cloudflare's `*.rlblais.org` **wildcard** Universal SSL — **as long as Total TLS
+7. **Certificate Transparency:** first-level names like `cam.example.com` stay out of CT
+   under Cloudflare's `*.example.com` **wildcard** Universal SSL — **as long as Total TLS
    is OFF**. Obscurity is a bonus, never the control.
 
 ## 3. Architecture
@@ -69,7 +69,7 @@ Confirmed with the user:
                    │  Cloudflare edge              │
                    │  + 1 WAF rule on /go2rtc/*    │  (blocks if secret cookie absent)
                    └────────┬─────────────────────┘
-                 cam.rlblais.org  (one hostname, path-routed)
+                 cam.example.com  (one hostname, path-routed)
                    ┌────────┴─────────┐
                    │   cloudflared     │  (launchd daemon; named tunnel)
                    │  /go2rtc/* ─┐     │
@@ -84,9 +84,9 @@ Confirmed with the user:
              └──────────────┘         └──────────────┘
 ```
 
-- **One named tunnel**, **one hostname** `cam.rlblais.org`, path-routed by cloudflared:
-  - `cam.rlblais.org/go2rtc/*` → `http://localhost:1984` (go2rtc; `base_path=/go2rtc`)
-  - `cam.rlblais.org/*` → `http://localhost:8080` (Flask gallery)
+- **One named tunnel**, **one hostname** `cam.example.com`, path-routed by cloudflared:
+  - `cam.example.com/go2rtc/*` → `http://localhost:1984` (go2rtc; `base_path=/go2rtc`)
+  - `cam.example.com/*` → `http://localhost:8080` (Flask gallery)
 - **Gate = one shared secret**, enforced in two complementary places:
   - **Flask** gates everything it serves (`/`, `/live`, images, `/api/captures`) on
     tunnel traffic, and **sets the secret cookie** when it sees a valid `?key=`.
@@ -111,14 +111,14 @@ exposed). *Assumption: cloudflared runs on the same Mac as the gallery (it does)
 
 ## 4. The share flow (end to end)
 
-1. You send a friend `https://cam.rlblais.org/?key=<SECRET>`.
+1. You send a friend `https://cam.example.com/?key=<SECRET>`.
 2. Their browser hits Flask (catch-all route). Flask validates `?key`, sets an
-   `HttpOnly; Secure; SameSite=Lax` cookie `wl_key=<SECRET>` for `cam.rlblais.org`, and
+   `HttpOnly; Secure; SameSite=Lax` cookie `wl_key=<SECRET>` for `cam.example.com`, and
    serves the gallery. (`Referrer-Policy: no-referrer` on all responses.)
 3. They browse photos and open `/live`. The page embeds go2rtc's player from
    `/go2rtc/stream.html?src=<cam>_sub&mode=mse` (same origin). Those requests carry the
    `wl_key` cookie, so the **WAF rule** lets them through to go2rtc, which serves MSE.
-4. A stranger hitting `cam.rlblais.org` **without** the key (and without the cookie) gets
+4. A stranger hitting `cam.example.com` **without** the key (and without the cookie) gets
    **404** from Flask; a stranger hitting `/go2rtc/*` without the cookie is **blocked** by
    the WAF rule. Rotating the secret (regenerate + update config + WAF rule) invalidates
    every old link.
@@ -146,7 +146,7 @@ UI/API is reachable under the secret-gated `/go2rtc` path (mitigation in §8).
 ```yaml
 remote:
   enabled: false                     # off by default; on activates the gate for tunnel traffic
-  base_url: "https://cam.rlblais.org"
+  base_url: "https://cam.example.com"
   share_secret_hash: null            # Werkzeug hash of the shared secret; set via wildlife-share-secret
   block_admin: true                  # 404 /admin for tunnel (loopback) traffic
 
@@ -203,7 +203,7 @@ reminder to paste the secret into the Cloudflare WAF rule.
   *Block* when `starts_with(http.request.uri.path, "/go2rtc")` **and**
   `not http.request.cookies["wl_key"][0] == "<SECRET>"`.
   **Verify at implementation that free-plan WAF custom rules support cookie matching;**
-  **fallback:** a tiny Cloudflare **Worker** bound to `cam.rlblais.org/go2rtc/*` that
+  **fallback:** a tiny Cloudflare **Worker** bound to `cam.example.com/go2rtc/*` that
   checks the `wl_key` cookie and either `fetch()`es through or returns `403` (also free).
 
 ### 6.5 Files touched (estimate)
@@ -268,8 +268,8 @@ the runbook; no code depends on it beyond forcing `mode=mse`.
    **token**. `sudo cloudflared service install <TOKEN>` (boot launch daemon; prefer
    `--token-file`/`TUNNEL_TOKEN` over shell history).
 3. Public hostnames (order matters — specific path first):
-   - `cam` . `rlblais.org`, **Path `go2rtc`** → HTTP `localhost:1984`
-   - `cam` . `rlblais.org`, (no path) → HTTP `localhost:8080`
+   - `cam` . `example.com`, **Path `go2rtc`** → HTTP `localhost:1984`
+   - `cam` . `example.com`, (no path) → HTTP `localhost:8080`
 4. Run `wildlife-share-secret`; note the printed secret + share URL.
 5. Set `remote.enabled: true`, `remote.base_url`, `livestream.base_path: "/go2rtc"` in
    `config.yaml`; regenerate `go2rtc.yaml` (`wildlife-stream-config`); restart gallery +
@@ -287,7 +287,7 @@ the runbook; no code depends on it beyond forcing `mode=mse`.
 1. **Config + no-op guard:** `RemoteConfig`, `livestream.base_path`, wired in;
    `enabled=false` changes nothing. Tests green. (Mergeable alone.)
 2. **Secret gate + `wildlife-share-secret`:** Flask gate, admin-block, cookie, headers,
-   rate-limit; CLI. Tunnel + `cam.rlblais.org` catch-all runbook → gallery shareable.
+   rate-limit; CLI. Tunnel + `cam.example.com` catch-all runbook → gallery shareable.
 3. **Remote live:** `livestream.base_path` → `go2rtc.yaml`; request-aware embeds/MSE; the
    `/go2rtc` cloudflared route + WAF rule; camera codec. → live shareable.
 4. **Docs:** README remote-access section + runbook.
@@ -324,7 +324,7 @@ Each phase is independently testable and mergeable.
 
 1. **Live playback = Option A** (go2rtc under `/go2rtc`, edge WAF rule) — confirm, or take
    Option B (simpler, no Safari).
-2. **Hostname `cam.rlblais.org`** and **subpath `/go2rtc`** — OK, or different labels?
+2. **Hostname `cam.example.com`** and **subpath `/go2rtc`** — OK, or different labels?
 3. **go2rtc-exposure trade** (§8) — ship with the plain gate, or include the optional
    path-restriction hardening from day one?
 4. **Secret in `?key=` query param** — OK as specified (cookie after first hit +

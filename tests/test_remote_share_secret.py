@@ -27,7 +27,7 @@ def test_cli_mints_verifiable_secret_and_prints_link(tmp_path, monkeypatch, caps
     cfgp = tmp_path / "config.yaml"
     cfgp.write_text(render_base(tmp_path), "utf-8")
     # Give it a base_url so the printed link is concrete.
-    cio.update_section(str(cfgp), "remote", {"base_url": "https://cam.rlblais.org"})
+    cio.update_section(str(cfgp), "remote", {"base_url": "https://cam.example.com"})
 
     monkeypatch.setattr("sys.argv", ["wildlife-share-secret", str(cfgp)])
     assert share_secret.main() == 0
@@ -39,7 +39,7 @@ def test_cli_mints_verifiable_secret_and_prints_link(tmp_path, monkeypatch, caps
     assert len(secret) >= 40  # token_urlsafe(32) is ~43 chars
     cfg = load_config(cfgp)
     assert check_password_hash(cfg.remote.share_secret_hash, secret)
-    assert f"https://cam.rlblais.org/?key={secret}" in out
+    assert f"https://cam.example.com/?key={secret}" in out
 
 
 def test_cli_rotation_invalidates_old(tmp_path, monkeypatch) -> None:
