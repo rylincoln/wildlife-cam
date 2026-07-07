@@ -11,6 +11,7 @@ from datetime import datetime  # noqa: E402
 
 from wildlife.config import load_config  # noqa: E402
 from wildlife.gallery.app import create_app  # noqa: E402
+from wildlife.models import Detection  # noqa: E402
 from wildlife.store import Store  # noqa: E402
 
 
@@ -68,3 +69,31 @@ def test_index_payload_marks_audio_rows(tmp_path):
     row = next(c for c in data["captures"] if c["id"] == cid)
     assert row["source_kind"] == "audio"
     assert row["audio_url"].endswith(f"/audio/{cid}")
+
+
+def test_audio_route_404_for_photo_capture(tmp_path):
+    """A normal photo capture has source_kind='reolink' and audio_path=NULL;
+    /audio/<id> must 404 for it (not just for a nonexistent id)."""
+    app, _ = _app(tmp_path)
+    config = load_config(tmp_path / "config.yaml")
+    store = Store(config.storage.db_path, config.storage.captures_dir)
+    store.init_schema()
+    photo_id = store.save_capture(
+        camera_id="cam1",
+        event_ts=datetime(2026, 7, 6, 6, 0, 0),
+        capture_ts=datetime(2026, 7, 6, 6, 0, 1),
+        frame=np.zeros((32, 64, 3), dtype=np.uint8),
+        det=Detection(label="bird", confidence=0.9, box_xyxy=(0.0, 0.0, 10.0, 10.0), box_area_frac=0.1),
+    )
+    store.close()
+
+    client = app.test_client()
+    assert client.get(f"/audio/{photo_id}").status_code == 404
+
+
+def test_index_html_renders_audio_card(tmp_path):
+    app, cid = _app(tmp_path)
+    html = app.test_client().get("/").get_data(as_text=True)
+    assert 'data-kind="audio"' in html
+    assert f'data-audio="/audio/{cid}"' in html
+    assert 'name="source_kind"' in html  # the Kind filter control is present

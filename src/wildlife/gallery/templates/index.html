@@ -41,6 +41,16 @@
       </label>
 
       <label class="field">
+        <span>Kind</span>
+        <select name="source_kind">
+          <option value="">All</option>
+          <option value="reolink" {% if filters.source_kind == 'reolink' %}selected{% endif %}>Camera AI</option>
+          <option value="continuous" {% if filters.source_kind == 'continuous' %}selected{% endif %}>Motion</option>
+          <option value="audio" {% if filters.source_kind == 'audio' %}selected{% endif %}>Audio (birds)</option>
+        </select>
+      </label>
+
+      <label class="field">
         <span>From</span>
         <input type="date" name="start" value="{{ filters.start_raw }}">
       </label>
@@ -77,13 +87,16 @@
                data-label="{{ c.label }}"
                data-confidence="{{ c.confidence }}"
                data-camera="{{ c.camera_id }}"
-               data-ts="{{ c.capture_ts }}">
+               data-ts="{{ c.capture_ts }}"
+               data-kind="{{ c.source_kind }}"
+               data-audio="{{ c.audio_url or '' }}">
         <img class="thumb" loading="lazy" src="{{ c.thumb_url }}"
              alt="{{ c.label }} detected on {{ c.camera_id }}">
         <div class="meta">
           <span class="label">{{ c.label }}</span>
           <span class="conf">{{ (c.confidence * 100) | round(0) | int }}%</span>
           <span class="cam">{{ c.camera_id }}</span>
+          {% if c.source_kind == 'audio' %}<span class="kind-badge">&#127925;</span>{% endif %}
           <span class="ts">{{ (c.capture_ts or '')[:19] | replace('T', ' ') }}</span>
         </div>
       </article>
@@ -103,7 +116,12 @@
     <button class="lb-btn lb-next" aria-label="Next">&#8250;</button>
     <figure class="lb-figure">
       <div class="lb-spinner" id="lbSpinner"></div>
+      <div class="lb-spec" id="lbSpec" hidden>
+        <img id="lbSpecImg" alt="">
+        <div class="playhead" id="lbPlayhead"></div>
+      </div>
       <img id="lbImg" alt="">
+      <audio id="lbAudio" controls hidden></audio>
       <figcaption id="lbCap" class="lb-cap"></figcaption>
     </figure>
   </div>
@@ -146,6 +164,8 @@
         card.dataset.confidence = c.confidence != null ? c.confidence : "";
         card.dataset.camera = c.camera_id != null ? c.camera_id : "";
         card.dataset.ts = c.capture_ts != null ? c.capture_ts : "";
+        card.dataset.kind = c.source_kind != null ? c.source_kind : "";
+        card.dataset.audio = c.audio_url != null ? c.audio_url : "";
 
         const img = document.createElement("img");
         img.className = "thumb";
@@ -164,6 +184,12 @@
         meta.querySelector(".conf").textContent = fmtConf(c.confidence);
         meta.querySelector(".cam").textContent = c.camera_id || "";
         meta.querySelector(".ts").textContent = fmtTs(c.capture_ts);
+        if (c.source_kind === "audio") {
+          const b = document.createElement("span");
+          b.className = "kind-badge";
+          b.textContent = "\u{1F3B5}";
+          meta.appendChild(b);
+        }
 
         card.appendChild(img);
         card.appendChild(meta);
@@ -221,7 +247,26 @@
       const lbImg = document.getElementById("lbImg");
       const lbCap = document.getElementById("lbCap");
       const lbSpinner = document.getElementById("lbSpinner");
+      const lbSpec = document.getElementById("lbSpec");
+      const lbSpecImg = document.getElementById("lbSpecImg");
+      const lbPlayhead = document.getElementById("lbPlayhead");
+      const lbAudio = document.getElementById("lbAudio");
       let currentCard = null;
+      let raf = 0;
+
+      function stopPlayhead() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+      function tickPlayhead() {
+        const d = lbAudio.duration;
+        if (d && lbSpecImg.clientWidth) {
+          lbPlayhead.style.transform =
+            "translateX(" + (lbAudio.currentTime / d) * lbSpecImg.clientWidth + "px)";
+        }
+        raf = requestAnimationFrame(tickPlayhead);
+      }
+      lbAudio.addEventListener("play", () => { stopPlayhead(); raf = requestAnimationFrame(tickPlayhead); });
+      lbAudio.addEventListener("pause", stopPlayhead);
+      lbAudio.addEventListener("ended", stopPlayhead);
+      lbAudio.addEventListener("seeked", tickPlayhead);
 
       function cards() {
         return Array.from(grid.querySelectorAll(".card"));
@@ -229,19 +274,35 @@
 
       function openLightbox(card) {
         currentCard = card;
-        const full = card.dataset.full;
         const label = card.dataset.label || "";
         const conf = fmtConf(card.dataset.confidence);
         const cam = card.dataset.camera || "";
         const ts = fmtTs(card.dataset.ts);
+        const isAudio = card.dataset.kind === "audio";
 
-        lbSpinner.hidden = false;
-        lbImg.classList.remove("ready");
-        lbImg.alt = label + " on " + cam;
-        // Lazy-load the full-resolution image only when opened.
-        lbImg.onload = () => { lbSpinner.hidden = true; lbImg.classList.add("ready"); };
-        lbImg.onerror = () => { lbSpinner.hidden = true; };
-        lbImg.src = full;
+        stopPlayhead();
+        if (isAudio) {
+          // spectrogram + audio player
+          lbImg.hidden = true;
+          lbSpec.hidden = false;
+          lbAudio.hidden = false;
+          lbSpinner.hidden = false;
+          lbSpecImg.onload = () => { lbSpinner.hidden = true; };
+          lbSpecImg.onerror = () => { lbSpinner.hidden = true; };
+          lbSpecImg.src = card.dataset.full;         // the spectrogram image
+          lbPlayhead.style.transform = "translateX(0)";
+          lbAudio.src = card.dataset.audio || "";
+        } else {
+          lbSpec.hidden = true;
+          lbAudio.hidden = true;
+          lbAudio.removeAttribute("src");
+          lbImg.hidden = false;
+          lbSpinner.hidden = false;
+          lbImg.classList.remove("ready");
+          lbImg.onload = () => { lbSpinner.hidden = true; lbImg.classList.add("ready"); };
+          lbImg.onerror = () => { lbSpinner.hidden = true; };
+          lbImg.src = card.dataset.full;
+        }
 
         lbCap.innerHTML =
           '<strong></strong><span class="lb-conf"></span>' +
@@ -256,6 +317,9 @@
       }
 
       function closeLightbox() {
+        stopPlayhead();
+        lbAudio.pause();
+        lbAudio.removeAttribute("src");
         lb.hidden = true;
         lbImg.removeAttribute("src");
         currentCard = null;
