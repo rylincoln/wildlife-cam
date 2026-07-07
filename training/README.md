@@ -3,25 +3,31 @@
 Stock `yolov8s.pt` only knows 80 COCO classes — of local wildlife, just **bear**
 and generic **bird**. To detect mule deer, elk, cougar, coyote, fox, turkey, etc.
 you need a model *trained* on them. This directory is the offline toolchain for
-that. Nothing here runs in the live app; you produce a Core ML model and point
-`detection.model_path` at it (no code change — `detect.py` reads `model.names`,
-and `gate.py` filters by `detection.animal_classes`, which must match).
+that — it produced the deployed `models/wildlife_sw_co.pt` (a 21-class `yolo11s`).
+Nothing here runs in the live app; you produce a `best.pt`, copy it into `models/`,
+and point `detection.model_path` at it — no code change, because `detect.py` reads
+`model.names` and `gate.py` filters by `detection.animal_classes` (which must
+match). It runs on the Mac GPU via **MPS**. (Core ML export to a `.mlpackage` for
+the Neural Engine is the intended fast path but currently fails — the installed
+torch is too new for `coremltools` — so `train.py` falls back to the `.pt`.)
 
 ## The pipeline
 
 ```
- public datasets ─▶ download_lila.py (target subset) ─▶ convert_lila.py ─┐
-                                                                          ├─▶ pool of
- your captures ──────────▶ autolabel.py (SpeciesNet) ────────────────────┘   images + .txt
+ LILA datasets ──▶ download_lila.py (target subset) ─▶ convert_lila.py ──┐
+                                                                          │
+ iNaturalist ────▶ download_inat.py (CC photos) ─▶ label_boxes.py ───────┤─▶ pool of
+                                        (MegaDetector v6 boxes)           │   images + .txt
+ your captures ──────────▶ autolabel.py (SpeciesNet) ────────────────────┘
                      │
                      ▼
             prepare_dataset.py  (burst-safe train/val split + data.yaml)
                      │
                      ▼
-                 train.py   (2-stage fine-tune → best.pt → Core ML .mlpackage)
+                 train.py   (2-stage fine-tune → best.pt)
                      │
                      ▼
-        copy .mlpackage → models/ ; set model_path + animal_classes ; restart worker
+      copy best.pt → models/ ; set model_path + animal_classes ; restart worker  (runs on MPS)
 ```
 
 `species.py` is the **single source of truth** for class names, so `data.yaml`
@@ -31,9 +37,13 @@ stable once you start labeling.
 ## Install
 
 ```bash
-pip install -e '.[train]'      # ultralytics + coremltools (fine-tune + export)
-pip install -e '.[autolabel]'  # speciesnet (auto-labeling; bundles MegaDetector)
+uv pip install -e '.[train]'      # ultralytics (+ coremltools; the venv is uv-managed, no pip)
+uv pip install -e '.[autolabel]'  # speciesnet (auto-labeling; bundles MegaDetector)
 ```
+
+`label_boxes.py` (the iNaturalist path) needs **no extra** — it runs MegaDetector v6
+on the already-installed `ultralytics`; the weights download to `weights/` on first
+use. `download_inat.py` uses only `requests`/`urllib`.
 
 ## Phase 0 — before you have your own captures (bootstrap on public data)
 
@@ -49,8 +59,22 @@ dataset's per-image URL. Good starting sets:
 
 Idaho/Caltech-image-level boxes come from the
 [LILA MegaDetector-results JSON](https://lila.science/megadetector-results-for-camera-trap-datasets/);
-Idaho is **non-commercial**. Fill rare species from **iNaturalist via GBIF**
-(filter CC0/CC-BY + region).
+Idaho is **non-commercial**. For species the camera-trap sets lack (marmot,
+snowshoe hare, porcupine, bighorn, …), fill from **iNaturalist** with
+`download_inat.py` → `label_boxes.py` (see below). It queries the iNat API
+directly for research-grade, CC-licensed, region-filtered photos — **not** GBIF
+(for these species ~95–99% of Colorado GBIF media is just re-ingested iNaturalist,
+and the rest is museum-specimen photos that hurt a trail-cam detector). Since iNat
+photos aren't boxed, `label_boxes.py` runs MegaDetector v6 to box them and forces
+the known species label.
+
+```bash
+# Fill an empty class from iNaturalist (Colorado; drop --place-id for full range):
+python training/download_inat.py --class yellow_bellied_marmot --place-id 34 \
+    --per-species 1200 --out ~/wildlife/data/inat/yellow_bellied_marmot
+python training/label_boxes.py --images ~/wildlife/data/inat/yellow_bellied_marmot \
+    --assume-species yellow_bellied_marmot --out ~/wildlife/labeled/inat_yellow_bellied_marmot
+```
 
 ```bash
 # ENA24 — small; just download the zip + json, then convert (native boxes):
@@ -103,15 +127,17 @@ python training/train.py --data ~/wildlife/dataset/data.yaml --model yolo11s.pt
 ## Deploy
 
 ```bash
-cp -r runs/wildlife/sw_co-s2/weights/best.mlpackage models/wildlife_sw_co.mlpackage
+cp runs/wildlife/sw_co-s2/weights/best.pt models/wildlife_sw_co.pt
 ```
 `train.py` prints the exact `animal_classes` block for the model it just trained
 (derived from the model's own `model.names`, so it always matches) — paste that
-into `config.yaml`, set `detection.model_path: "models/wildlife_sw_co.mlpackage"`,
+into `config.yaml`, set `detection.model_path: "models/wildlife_sw_co.pt"`,
 and restart the worker (or use the admin UI → it validates + restarts). Any
 trained class you omit from `animal_classes` is silently dropped by the gate, so
-keep them in sync. The `.mlpackage` runs on the **Apple Neural Engine** — ~3× faster than
-CPU and off the GPU shaders go2rtc wants.
+keep them in sync. The `.pt` runs on the Mac GPU via **MPS**. (Core ML export to a
+`.mlpackage` on the Neural Engine — lower power, off the GPU shaders go2rtc wants —
+is the intended target but currently fails on this torch/`coremltools`, so `.pt`
+on MPS is the shipped deploy path; `train.py` prints this same hint when export fails.)
 
 ## Tips (from the research)
 
@@ -135,7 +161,9 @@ CPU and off the GPU shaders go2rtc wants.
 |---|---|
 | `species.py` | canonical class taxonomy (tiers + support); emits `data.yaml` names & `animal_classes` |
 | `download_lila.py` | fetch a target-species subset of a LILA dataset (skips the huge full archive) |
-| `convert_lila.py` | COCO-Camera-Traps + LILA MD-results JSON → YOLO label pool |
+| `convert_lila.py` | COCO-Camera-Traps + LILA MD-results JSON → YOLO label pool (`--min-box-rel-area` prunes specks) |
+| `download_inat.py` | fetch CC-licensed, region-filtered research-grade photos from the iNaturalist API |
+| `label_boxes.py` | box iNat photos with MegaDetector v6 and force the known species label → YOLO pool |
 | `autolabel.py` | SpeciesNet `predictions.json` → YOLO labels + `review.csv` |
-| `prepare_dataset.py` | burst-safe train/val split + `data.yaml` |
-| `train.py` | 2-stage fine-tune + Core ML export |
+| `prepare_dataset.py` | burst-safe train/val split + `data.yaml` (`--max-per-class` for stratified balance) |
+| `train.py` | 2-stage fine-tune → `best.pt` (deploy on MPS; Core ML export attempted, falls back to `.pt`) |

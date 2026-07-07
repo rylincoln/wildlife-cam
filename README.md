@@ -1,11 +1,23 @@
 # Wildlife Detection System
 
-Fully-local, motion-triggered wildlife detection for PoE cameras, running on an
-Apple Silicon Mac. It subscribes to camera-side detection events, grabs a short
-RTSP frame burst per event, runs YOLO object detection on the Mac GPU (MPS), and
-saves **only** frames containing an animal at or above a confidence threshold.
-Captures land on local disk with a row in SQLite, and a small read-only Flask
-gallery lets you browse them on your LAN. No cloud, no subscriptions.
+Fully-local wildlife detection for PoE cameras, running on an Apple Silicon Mac.
+It grabs a short RTSP frame burst per detection event, runs a **fine-tuned YOLO
+species detector** on the Mac GPU (MPS), and saves **only** frames containing a
+target animal at or above a confidence threshold. The deployed model identifies
+~20 southwest-Colorado species (mule deer, elk, black bear, coyote, red/gray fox,
+mountain lion, bobcat, wild turkey, pronghorn, moose, marmot, and more) rather
+than stock COCO classes — it's produced by the [`training/`](training/README.md)
+toolchain and runs as a `.pt` on MPS.
+
+Three detection paths feed the same pipeline, all optional and independent:
+
+- **Camera AI events** — subscribe to the camera's onboard detection and burst-grab on each.
+- **Continuous motion gate** — an always-on MOG2 motion detector fires *your* model, catching wildlife the camera's person/car AI ignores.
+- **BirdNET audio bird-ID** — identify birds by song from the camera's audio (CPU-side), saved as playable spectrograms.
+
+Captures land on local disk with a row in SQLite, and a Flask gallery lets you
+browse them on your LAN (with an optional password-gated admin editor and
+Cloudflare-Tunnel remote access). No cloud, no subscriptions.
 
 See [`spec.md`](spec.md) for the full build specification (architecture, build
 order, operational notes).
@@ -53,10 +65,18 @@ source .venv/bin/activate
 uv pip install -e ".[detect,cameras,dev]"
 ```
 
-Optional extras:
+Optional extras (installed as needed; see their sections): `admin` (config
+editor), `audio` (BirdNET), `train` / `autolabel` (the training toolchain).
 
-- `coreml` — export the model to Core ML for Apple Neural Engine (ANE) inference
-  (`uv pip install -e ".[coreml]"`). See [`models/README.md`](models/README.md).
+- `coreml` — **currently non-functional on this stack.** Core ML export was meant
+  to target the Apple Neural Engine, but the installed torch (2.12) is too new for
+  `coremltools`, so `.export(format="coreml")` fails. The deployed detector runs
+  as a `.pt` on **MPS** instead (no Core ML needed). The `[coreml]` extra still
+  exists for when the toolchain versions realign. See [`models/README.md`](models/README.md).
+
+> **Note:** the shipped `.venv` is **uv-managed** and has no `pip` binary — use
+> `uv pip install …` (as above), not `pip`. `pip` only works in a hand-made
+> `python -m venv`.
 
 ### 3. Configure
 
@@ -135,8 +155,10 @@ wildlife-gallery           # binds config.gallery host/port (default 0.0.0.0:808
 ```
 
 Open `http://<mac-LAN-ip>:8080` from any device on your LAN. Paginated thumbnail
-grid, newest first, with filters for camera, date range, class, and minimum
-confidence; click a thumbnail to load the full image.
+grid, newest first, with filters for camera, date range, class, minimum
+confidence, and **source** — *Camera AI* (`reolink`), *Motion* (`continuous`), or
+*Audio (birds)* (`audio`) — so you can isolate each detection path. Click a
+thumbnail to load the full image; audio detections open a playable spectrogram.
 
 > **Security:** the gallery has **no authentication** and is intended for
 > LAN-only use (like the media-server UI on the same machine). Do **not** expose
@@ -309,8 +331,9 @@ detections. It reuses the gallery filters (camera, class, date, plus a
   data. (Reclassifying is DB-only — the on-disk filename keeps its original
   label, which is harmless because files are resolved by their stored path.)
 - **Delete** a capture. This is **permanent**: it removes the SQLite row *and*
-  both JPEG files (full + thumbnail), mirroring `scripts/prune.py`. There is no
-  undo. Deleting is the disposal path for false positives.
+  the JPEGs (full + thumbnail) — and, for audio detections, the `.m4a` clip —
+  mirroring `scripts/prune.py`. There is no undo. Deleting is the disposal path
+  for false positives.
 - **Bulk**: tick the checkboxes to delete, reclassify, or mark-reviewed many at
   once. Selection applies to the current page.
 - A **"Mark reviewed"** action and the **Unreviewed** filter let you work
@@ -514,36 +537,62 @@ sudo pmset -a sleep 0
 
 ## Detecting local wildlife (training)
 
-The stock COCO model only names **bear** and generic **bird** among local
-species — mule deer, elk, cougar, coyote, fox, turkey, etc. are not COCO classes,
-so `detection.animal_classes` can't filter for what the model never predicts. The
-[`training/`](training/README.md) toolchain fine-tunes a detector on
-southwest-Colorado species and exports it to Core ML; you then just point
-`detection.model_path` at the `.mlpackage` and match `animal_classes` (no code
-change). The recommended loop — auto-label with **SpeciesNet**, two-stage YOLO
-fine-tune, Core ML export — plus which public datasets to bootstrap from before
-you have your own captures, is in [`training/README.md`](training/README.md).
+The system ships pointed at a **fine-tuned southwest-Colorado species detector**
+(`models/wildlife_sw_co.pt`, a 21-class `yolo11s`, val mAP50 ≈ 0.81) rather than
+the stock 80-class COCO model — deer, elk, mountain lion, coyote, fox, turkey,
+marmot, etc. aren't COCO classes, so `detection.animal_classes` can't filter for
+what a COCO model never predicts. `detect.py` reads the class names from the model
+itself and `gate.py` keeps only detections whose label is in `animal_classes`, so
+swapping models needs **no code change** — point `detection.model_path` at a `.pt`
+and match `animal_classes`.
+
+The [`training/`](training/README.md) toolchain is how that model was built and how
+you retrain or extend it:
+
+- **Bootstrap from public data** before you have your own captures — LILA
+  camera-trap datasets (`download_lila.py` → `convert_lila.py`) plus an
+  **iNaturalist gap-fill** for species the camera-trap sets lack
+  (`download_inat.py` → `label_boxes.py`, which boxes CC-licensed photos with
+  **MegaDetector v6** and forces the known species label).
+- **Auto-label your own captures** with **SpeciesNet** (`autolabel.py`).
+- **Two-stage YOLO fine-tune** (`train.py`), then **deploy the `best.pt` on MPS**:
+  copy it into `models/`, set `model_path` + `animal_classes`, restart the worker.
+
+> Core ML export (a `.mlpackage` for the Apple Neural Engine) is the intended fast
+> path but currently **fails** — the installed torch is too new for `coremltools` —
+> so the model runs as a `.pt` on the GPU (MPS) instead. `train.py` already falls
+> back to the `.pt` and prints the deploy hint. Dataset choices and exact commands
+> are in [`training/README.md`](training/README.md).
 
 ---
 
 ## Retention
 
 `scripts/prune.py` deletes captures older than `retention.max_age_days` (and,
-optionally, below `retention.min_confidence_keep`). Schedule it daily via a
-`StartCalendarInterval` LaunchDaemon.
+optionally, below `retention.min_confidence_keep`) — removing the SQLite row, the
+JPEGs, and any audio clip. Human-reviewed captures are exempt from the
+confidence rule. Schedule it daily via a `StartCalendarInterval` LaunchDaemon —
+no prune plist ships in `launchd/`, so author your own from one of the examples there.
 
 ---
 
 ## Layout
 
-- `src/wildlife/` — the package (config, events, capture, detect, gate, store,
-  worker, gallery).
-- `scripts/` — on-device test + maintenance scripts.
-- `training/` — offline toolchain to fine-tune a local-species detector (auto-label
-  → split → train → Core ML export). See [`training/README.md`](training/README.md).
-- `models/` — YOLO weights (auto-downloaded on first run; gitignored). See
-  [`models/README.md`](models/README.md).
-- `launchd/` — example LaunchDaemon plists.
+- `src/wildlife/` — the package: `config`, `capture`, `detect`, `gate`, `store`,
+  `worker`; `motion` + `audio` + `audio_gate` + `_colormap` (continuous & BirdNET
+  detection); `events/` (`reolink_native`, `continuous_motion`, `audio_detection`,
+  `onvif_bridge`); and the `gallery/`, `admin/`, `remote/`, `stream/` subpackages.
+- `scripts/` — on-device test + maintenance scripts (`setup_macos.sh`,
+  `run_demo.sh`, `install_launchd.sh`, `setup_remote.sh`, `prune.py`, `test_*.py`).
+- `training/` — offline toolchain to fine-tune a local-species detector: public-data
+  bootstrap (LILA `download_lila`/`convert_lila` + iNaturalist `download_inat`/
+  `label_boxes`) → autolabel → split → two-stage fine-tune → deploy `best.pt` on
+  MPS. See [`training/README.md`](training/README.md).
+- `models/` — model weights (gitignored). The deployed `wildlife_sw_co.pt` is
+  produced by the training toolchain and copied in by hand; stock base checkpoints
+  (e.g. `yolov8s.pt`) auto-download. See [`models/README.md`](models/README.md).
+- `launchd/` — example LaunchDaemon plists (worker, gallery, go2rtc stream, reloader).
+- `docs/` — design specs and implementation plans for the larger features.
 - `tests/` — hardware-free unit tests.
 
 For full details, read [`spec.md`](spec.md).
@@ -555,18 +604,26 @@ For full details, read [`spec.md`](spec.md).
 This project stands on some excellent open-source work:
 
 - [**go2rtc**](https://github.com/AlexxIT/go2rtc) — the on-demand WebRTC/MSE
-  restreamer behind the optional Live view.
+  restreamer behind the Live view, continuous motion, and audio paths.
 - [**Ultralytics YOLO**](https://github.com/ultralytics/ultralytics) — the object
-  detector (stock COCO model and the fine-tuning toolchain).
+  detector framework, used both stock and for the fine-tuned SW-Colorado model.
+- [**BirdNET**](https://github.com/birdnet-team/birdnet) — the acoustic model
+  behind the audio bird-ID feature (pulls TensorFlow via the `[audio]` extra).
+- [**MegaDetector**](https://github.com/microsoft/CameraTraps) / Pytorch-Wildlife —
+  the camera-trap animal detector used (v6, via Ultralytics) to box the iNaturalist
+  gap-fill images in `training/label_boxes.py`.
 - [**SpeciesNet**](https://github.com/google/cameratrapai) — used to auto-label
-  training images with species predictions.
+  training images with species predictions (bundles MegaDetector).
 - [**LILA BC**](https://lila.science/) camera-trap datasets (ENA24, Caltech
-  Camera Traps, Idaho, etc.) — the public data used to bootstrap a local-species
-  detector before you have your own captures. Please honor each dataset's
-  citation and attribution terms.
+  Camera Traps, Idaho, etc.) and [**iNaturalist**](https://www.inaturalist.org/) —
+  the public data used to bootstrap a local-species detector before you have your
+  own captures. Please honor each dataset's citation terms and each iNaturalist
+  observation's CC license / attribution.
 - [**Reolink**](https://reolink.com/) cameras and the
   [`reolink-aio`](https://github.com/starkillerOG/reolink_aio) library for the
   native event path.
+- [**Cloudflare Tunnel**](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+  (`cloudflared`) — the zero-port-forward remote-access path.
 
 ---
 
@@ -575,11 +632,13 @@ This project stands on some excellent open-source work:
 This project's own source is **MIT** — see [`LICENSE`](LICENSE).
 
 > **Dependency licenses differ.** The MIT license covers only the code in this
-> repository. Notably, the stock YOLO model and the `ultralytics` package are
-> **AGPL-3.0** (not MIT), and the training toolchain also uses SpeciesNet. You
-> are responsible for complying with the licenses of the model weights and
-> dependencies you install and distribute — especially if you run this as a
-> network-accessible service or redistribute it.
+> repository. Notably, the `ultralytics` package is **AGPL-3.0** (not MIT), and
+> the **fine-tuned `wildlife_sw_co.pt` is derived from Ultralytics YOLO**, so the
+> same AGPL considerations apply to the deployed model — running it as a
+> network-accessible service is the AGPL trigger. The training toolchain also uses
+> SpeciesNet and MegaDetector, and the `[audio]` extra pulls TensorFlow. You are
+> responsible for complying with the licenses of the model weights, datasets, and
+> dependencies you install and distribute.
 
 ---
 
