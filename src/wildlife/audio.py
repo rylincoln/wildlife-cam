@@ -191,6 +191,12 @@ class AudioAnalyzer:
                 default_confidence_threshold=cfg.confidence_threshold,
                 bandpass_fmin=cfg.bandpass_fmin,
                 custom_species_list=self._species_list,
+                # birdnet defaults n_workers=None -> cpu_count() (8 here), spawning an
+                # 8-process TF pool PER 3s window. That's meant for batch-processing
+                # long files; for one short real-time window it just pins all cores and
+                # starves the go2rtc livestream. One worker is plenty and keeps 7 cores free.
+                n_workers=1,
+                n_producers=1,
             )
         _purge_birdnet_session_loggers()  # reclaim birdnet 0.2.16's per-call FD/thread/logger leak
         arr = result.to_structured_array()
