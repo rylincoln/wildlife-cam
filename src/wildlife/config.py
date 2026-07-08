@@ -361,6 +361,10 @@ class MegadetectorConfig(BaseModel):
     classes: list[str] = Field(default_factory=lambda: ["person", "animal"])
     person_override: bool = True  # relabel a kept detection to person when MD sees one on it
     rescue_misses: bool = True  # save an MD animal/person when the species model kept nothing
+    # Rescue creates a brand-new saved capture from a generic MD label (bypassing
+    # the species gate), so it needs a higher bar than `confidence` (which the
+    # person-override path shares). Below this, a miss is left rejected.
+    rescue_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     suppress_false_positives: bool = False  # drop a kept detection MD sees nothing behind (opt-in)
     # Per-camera min seconds between *rescue* MD runs. The recall net fires on
     # events the species model kept nothing on -- which never arm the save-keyed
