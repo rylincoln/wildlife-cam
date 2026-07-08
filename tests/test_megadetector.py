@@ -124,6 +124,25 @@ def test_rescue_excludes_classes_not_in_list():
     assert positives == []
 
 
+def test_rescue_respects_min_confidence():
+    """A low-conf MD detection (above the MD floor but below rescue_min_confidence)
+    is NOT rescued — this is the 'animal @ 0.21 on a grey frame' guard."""
+    md = [_det("animal", 0.3, area=0.2)]  # 0.3: >= cfg.confidence(0.2) but < 0.5
+    _bd, _bf, positives, reason = second_pass_decision(
+        md_dets=md, best_det=None, best_frame=None, positives=[],
+        representative_frame="rep", save_best_only=False,
+        cfg=_cfg(rescue_min_confidence=0.5),
+    )
+    assert positives == [] and reason == ""
+    # Lower the bar and the same detection IS rescued.
+    _bd, _bf, positives, _r = second_pass_decision(
+        md_dets=md, best_det=None, best_frame=None, positives=[],
+        representative_frame="rep", save_best_only=False,
+        cfg=_cfg(rescue_min_confidence=0.2),
+    )
+    assert len(positives) == 1 and positives[0][1].label == "animal"
+
+
 def test_rescue_disabled_leaves_empty():
     md = [_det("animal", 0.9, area=0.2)]
     _bd, _bf, positives, reason = second_pass_decision(

@@ -183,6 +183,7 @@ def test_continuous_capture_persists_source_kind(monkeypatch, tmp_path):
     worker._deduper = Deduper(0, 10_000)
 
     frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    frame[20:60, 20:60] = 255  # non-blank content (a flat/zeros frame is now dropped as a hiccup)
     monkeypatch.setattr(
         "wildlife.worker.grab_burst",
         lambda *a, **k: [frame],

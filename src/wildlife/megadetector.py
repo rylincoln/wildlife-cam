@@ -108,7 +108,14 @@ def second_pass_decision(
     # --- Recall net: species kept nothing, MD sees an actionable object. ------
     if not kept:
         if cfg.rescue_misses:
-            candidates = [d for d in actionable if d.box_area_frac >= min_area_frac]
+            # Rescue bypasses the species gate and saves a generic label, so it
+            # needs a higher confidence bar than person-override (a low-conf MD box
+            # on a hiccup/flat frame would otherwise be saved as "animal").
+            rescue_min = max(cfg.confidence, getattr(cfg, "rescue_min_confidence", 0.0))
+            candidates = [
+                d for d in actionable
+                if d.box_area_frac >= min_area_frac and d.confidence >= rescue_min
+            ]
             if candidates:
                 top = max(candidates, key=lambda d: d.confidence)
                 rescued = Detection(

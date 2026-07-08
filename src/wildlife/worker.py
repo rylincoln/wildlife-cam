@@ -64,6 +64,19 @@ _MAX_BACKOFF_S = 30.0
 _QUEUE_GET_TIMEOUT_S = 0.5
 # Grace period to let each producer thread notice shutdown and exit.
 _PRODUCER_JOIN_TIMEOUT_S = 2.0
+# A frame flatter than this (pixel variance) is a near-uniform grey/black plate
+# from a go2rtc reconnect or decode gap, not a real scene (a real outdoor frame
+# is in the thousands). We drop these before inference so a stream hiccup can't
+# be saved -- neither by the species model nor a MegaDetector rescue.
+_MIN_FRAME_VARIANCE = 10.0
+
+
+def _is_blank_frame(frame) -> bool:
+    """True if ``frame`` is near-uniform (blank/corrupt), judged by pixel variance."""
+    try:
+        return float(frame.var()) < _MIN_FRAME_VARIANCE
+    except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
+        return False
 
 
 def _now() -> datetime:
@@ -573,6 +586,20 @@ class _Worker:
                 cap.stream,
             )
             return
+
+        # 3b) Drop blank/flat frames. A go2rtc reconnect or a decode gap can hand
+        # us a near-uniform grey plate; a whole-frame flip to grey also trips MOG2
+        # motion, so these arrive as spurious events. Filtering here stops both the
+        # species model and a MegaDetector rescue from ever saving the garbage.
+        usable = [f for f in frames if not _is_blank_frame(f)]
+        if not usable:
+            logger.info(
+                "Camera %s: REJECTED (all %d burst frame(s) blank/flat — likely a stream hiccup).",
+                camera_id,
+                len(frames),
+            )
+            return
+        frames = usable
 
         # 4) Inference + gate, per frame.
         det_cfg = self._config.detection

@@ -124,5 +124,6 @@ megadetector: # optional MegaDetector v6 second pass over the species detector (
   classes: [person, animal] # actionable MD classes; add "vehicle" for a driveway/gate camera
   person_override: true # relabel a kept detection to person when MD sees a person on it
   rescue_misses: true # save an MD animal/person when the species model kept nothing
+  rescue_min_confidence: 0.5 # rescue bypasses the species gate + saves a generic label, so require this (higher than `confidence`) to avoid saving low-conf/hiccup detections
   rescue_cooldown_s: 0 # per-camera min seconds between rescue MD runs; raise (e.g. 15) on a motion-heavy camera so wind-blown vegetation doesn't fire the heavy 1280px pass every event
   suppress_false_positives: false # drop a kept detection MD sees nothing behind (opt-in; MD can miss too)

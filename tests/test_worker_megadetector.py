@@ -11,9 +11,23 @@ import pytest
 
 pytest.importorskip("wildlife.worker")
 
+import numpy as np  # noqa: E402
+
 from wildlife.config import Config  # noqa: E402
 from wildlife.models import Detection  # noqa: E402
-from wildlife.worker import _Worker  # noqa: E402
+from wildlife.worker import _Worker, _is_blank_frame  # noqa: E402
+
+
+def test_is_blank_frame_flags_flat_frames():
+    """A near-uniform grey/black plate (stream hiccup) is blank; a real scene isn't."""
+    grey = np.full((120, 160, 3), 129, dtype=np.uint8)  # flat grey -> var 0
+    black = np.zeros((120, 160, 3), dtype=np.uint8)
+    assert _is_blank_frame(grey) is True
+    assert _is_blank_frame(black) is True
+    # A varied "scene" (structured gradient + noise) is not blank.
+    scene = (np.tile(np.linspace(0, 255, 160, dtype=np.uint8), (120, 1))[:, :, None]
+             .repeat(3, axis=2))
+    assert _is_blank_frame(scene) is False
 
 
 class _FakeMD:
