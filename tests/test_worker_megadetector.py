@@ -15,7 +15,31 @@ import numpy as np  # noqa: E402
 
 from wildlife.config import Config  # noqa: E402
 from wildlife.models import Detection  # noqa: E402
-from wildlife.worker import _Worker, _is_blank_frame  # noqa: E402
+from wildlife.worker import _Worker, _is_blank_frame, _is_defocused_blob  # noqa: E402
+
+
+def test_is_defocused_blob_flags_bright_smooth_blobs():
+    """A bright out-of-focus blob (insect at IR lens) is dropped; a textured bright
+    region (real in-focus animal) and a dark region are kept."""
+    import cv2
+
+    H = W = 400
+    box = (80, 80, 320, 320)
+    # 1) smooth bright blob (out-of-focus): filled bright circle, heavily blurred
+    blob = np.zeros((H, W, 3), np.uint8)
+    cv2.circle(blob, (200, 200), 120, (255, 255, 255), -1)
+    blob = cv2.GaussianBlur(blob, (99, 99), 0)
+    assert _is_defocused_blob(blob, box) is True
+    # 2) textured bright region (in-focus): bright circle + high-frequency noise
+    rng = np.random.default_rng(0)
+    noisy = np.zeros((H, W, 3), np.uint8)
+    cv2.circle(noisy, (200, 200), 120, (255, 255, 255), -1)
+    noise = rng.integers(0, 55, (H, W, 3), dtype=np.uint8)
+    noisy = cv2.subtract(noisy, noise)  # stays bright but gains structure
+    assert _is_defocused_blob(noisy, box) is False
+    # 3) dark region (not a bright blob) -> not judged, kept
+    dark = np.full((H, W, 3), 30, np.uint8)
+    assert _is_defocused_blob(dark, box) is False
 
 
 def test_is_blank_frame_flags_flat_frames():

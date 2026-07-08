@@ -79,6 +79,42 @@ def _is_blank_frame(frame) -> bool:
         return False
 
 
+# Insect/moth flying at the IR illuminator = a bright but grossly OUT-OF-FOCUS
+# blob (it sits ~cm from the lens). At night it fools BOTH the species model AND
+# MegaDetector, so neither the allowlist gate nor MD suppression catches it. But a
+# real animal is at scene distance and in focus (has internal edges), whereas the
+# blob is featureless. We measure the sharpness (Laplacian variance) of the
+# detection's BRIGHT region and drop it when it's smooth. Measured on this rig:
+# insect blobs 0-5, a real in-focus subject ~4000 -- a ~1000x gap. Only bright-blob
+# detections are judged, so daytime/mid-tone real animals are never affected.
+_BLOB_BRIGHT_LEVEL = 200  # 0-255; a "bright" pixel (IR-lit blob / animal)
+_BLOB_MIN_BRIGHT_PIX = 100  # need a real bright region before judging focus
+_BLOB_MIN_SHARPNESS = 60.0  # bright-region Laplacian variance below this = defocused blob
+
+
+def _is_defocused_blob(frame, box) -> bool:
+    """True if ``box`` in ``frame`` is a bright, out-of-focus blob (insect at the IR
+    lens) rather than an in-focus animal. Only bright-blob detections are judged;
+    everything else returns False (not dropped). Never raises."""
+    try:
+        import cv2
+        import numpy as np
+
+        h, w = frame.shape[:2]
+        x1 = max(0, int(box[0])); y1 = max(0, int(box[1]))
+        x2 = min(w, int(box[2])); y2 = min(h, int(box[3]))
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            return False
+        gray = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.float32)
+        bright = gray > _BLOB_BRIGHT_LEVEL
+        if int(bright.sum()) < _BLOB_MIN_BRIGHT_PIX:
+            return False  # not a bright-blob detection -> don't judge focus
+        lap = cv2.Laplacian(gray, cv2.CV_32F)
+        return float(lap[bright].var()) < _BLOB_MIN_SHARPNESS
+    except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
+        return False
+
+
 def _now() -> datetime:
     """Return the current wall-clock time used for dedupe and capture stamps.
 
@@ -632,6 +668,25 @@ class _Worker:
             best_det, best_frame, positives, md_reason = self._megadetector_pass(
                 frames, best_det, best_frame, positives, save_best_only, camera_id
             )
+
+        # 4c) Drop out-of-focus bright blobs (insects at the IR illuminator) that
+        # fool BOTH the species model and MegaDetector at night. Runs on the final
+        # boxes so it catches species detections AND MD rescues alike.
+        if save_best_only:
+            if best_det is not None and _is_defocused_blob(best_frame, best_det.box_xyxy):
+                logger.info(
+                    "Camera %s: dropped %s (conf=%.2f) — out-of-focus blob (insect at IR lens).",
+                    camera_id, best_det.label, best_det.confidence,
+                )
+                best_det, best_frame = None, None
+        elif positives:
+            kept_pos = [(f, d) for f, d in positives if not _is_defocused_blob(f, d.box_xyxy)]
+            if len(kept_pos) != len(positives):
+                logger.info(
+                    "Camera %s: dropped %d out-of-focus blob detection(s) (insect at IR lens).",
+                    camera_id, len(positives) - len(kept_pos),
+                )
+            positives = kept_pos
 
         # 5) Save: the single best frame, or every positive detection.
         source_kind = "continuous" if is_continuous else "reolink"
