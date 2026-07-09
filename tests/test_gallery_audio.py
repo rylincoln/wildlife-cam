@@ -81,6 +81,39 @@ def test_photo_capture_has_no_species_link(tmp_path):
     assert _species_url("Lesser Goldfinch", "audio") == "https://merlinbirds.org/species/lesgol"
 
 
+def test_audio_payload_has_species_photo_url(tmp_path):
+    app, cid = _app(tmp_path)
+    data = app.test_client().get("/api/captures").get_json()
+    row = next(c for c in data["captures"] if c["id"] == cid)
+    # American Robin -> eBird code 'amerob' -> cached-photo route
+    assert row["species_photo_url"].endswith("/species_photo/amerob")
+
+
+def test_species_photo_route_caches_hits_and_misses(tmp_path, monkeypatch):
+    """The route fetches once, caches hits on disk, and negative-caches misses."""
+    import wildlife.gallery.app as gallery_app
+
+    calls = []
+
+    def _fake_fetch(common, timeout=6.0):
+        calls.append(common)
+        return b"\xff\xd8\xffFAKEJPEG" if common == "American Robin" else None
+
+    monkeypatch.setattr(gallery_app, "_fetch_species_photo", _fake_fetch)
+    client = _app(tmp_path)[0].test_client()
+
+    # success -> 200 + cached on disk (fetched once even across two requests)
+    assert client.get("/species_photo/amerob").status_code == 200
+    assert client.get("/species_photo/amerob").mimetype == "image/jpeg"
+    # miss -> 404, negative-cached (fetched once, second request served from marker)
+    assert client.get("/species_photo/lesgol").status_code == 404
+    assert client.get("/species_photo/lesgol").status_code == 404
+    assert calls == ["American Robin", "Lesser Goldfinch"]
+    # unknown code -> 404 without any network fetch
+    assert client.get("/species_photo/notacode").status_code == 404
+    assert calls == ["American Robin", "Lesser Goldfinch"]
+
+
 def test_audio_route_404_for_photo_capture(tmp_path):
     """A normal photo capture has source_kind='reolink' and audio_path=NULL;
     /audio/<id> must 404 for it (not just for a nonexistent id)."""

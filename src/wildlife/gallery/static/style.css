@@ -725,3 +725,15 @@ body.admin { padding-bottom: 60px; }
 }
 .lb-species:hover { border-color: var(--accent); color: var(--accent); }
 .lb-species[hidden] { display: none; }
+
+/* --- Species reference photo (bird IDs) beside the spectrogram in the lightbox --- */
+.lb-audio-media {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  align-items: center; justify-content: center; max-width: 100%;
+}
+.lb-audio-media[hidden] { display: none; }
+.lb-bird {
+  max-height: 60vh; max-width: min(46vw, 520px); object-fit: contain;
+  border-radius: var(--radius); box-shadow: var(--shadow); background: var(--bg-elev);
+}
+.lb-bird[hidden] { display: none; }
