@@ -30,6 +30,7 @@ import sys
 import threading
 import time as _time
 from datetime import datetime, time
+from functools import lru_cache
 from pathlib import Path
 
 from flask import (
@@ -52,6 +53,31 @@ from wildlife.remote import capability as _cap
 logger = logging.getLogger(__name__)
 
 _DATE_FMT = "%Y-%m-%d"
+
+# Audio (BirdNET) captures store a bird's common name; map it to its eBird 6-letter
+# species code so the gallery can deep-link to Merlin (opens the Merlin app if
+# installed, else the web species account). Table derived from BirdNET's taxonomy;
+# common names are unique across the 6522 species, so the lookup is unambiguous.
+_BIRD_CODES_PATH = Path(__file__).with_name("data") / "bird_codes.json"
+_MERLIN_SPECIES_BASE = "https://merlinbirds.org/species/"
+
+
+@lru_cache(maxsize=1)
+def _bird_codes() -> dict:
+    """Load ``{common_name: ebird_code}`` once; empty (links disabled) on any error."""
+    try:
+        return json.loads(_BIRD_CODES_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a missing/broken table just disables the links
+        logger.warning("bird_codes.json unavailable; species links disabled.", exc_info=True)
+        return {}
+
+
+def _species_url(label: str | None, source_kind: str | None) -> str | None:
+    """Merlin species deep-link for an audio (bird) capture, or ``None`` otherwise."""
+    if source_kind != "audio" or not label:
+        return None
+    code = _bird_codes().get(label.strip())
+    return f"{_MERLIN_SPECIES_BASE}{code}" if code else None
 
 # Live-update stream tuning.
 #
@@ -369,6 +395,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             "image_url": url_for("image", capture_id=cid),
             "source_kind": row.get("source_kind"),
             "audio_url": url_for("audio", capture_id=cid) if row.get("audio_path") else None,
+            "species_url": _species_url(row.get("label"), row.get("source_kind")),
         }
 
     def _query_page(filters: dict, page: int) -> tuple[list[dict], bool]:

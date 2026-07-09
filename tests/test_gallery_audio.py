@@ -69,6 +69,16 @@ def test_index_payload_marks_audio_rows(tmp_path):
     row = next(c for c in data["captures"] if c["id"] == cid)
     assert row["source_kind"] == "audio"
     assert row["audio_url"].endswith(f"/audio/{cid}")
+    # Bird species get a Merlin deep-link (American Robin -> eBird code 'amerob').
+    assert row["species_url"] == "https://merlinbirds.org/species/amerob"
+
+
+def test_photo_capture_has_no_species_link(tmp_path):
+    """Only audio (bird) captures get a species link; photos (elk/deer/...) don't."""
+    from wildlife.gallery.app import _species_url
+    assert _species_url("elk", "reolink") is None
+    assert _species_url("bird", "audio") is None  # generic, not an eBird species
+    assert _species_url("Lesser Goldfinch", "audio") == "https://merlinbirds.org/species/lesgol"
 
 
 def test_audio_route_404_for_photo_capture(tmp_path):
