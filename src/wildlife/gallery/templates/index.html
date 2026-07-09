@@ -98,8 +98,13 @@
                data-ts="{{ c.capture_ts }}"
                data-kind="{{ c.source_kind }}"
                data-audio="{{ c.audio_url or '' }}"
-               data-species="{{ c.species_url or '' }}">
-        <img class="thumb" loading="lazy" src="{{ c.thumb_url }}"
+               data-species="{{ c.species_url or '' }}"
+               data-species-photo="{{ c.species_photo_url or '' }}"
+               data-spectrogram="{{ c.thumb_url }}">
+        <img class="thumb" loading="lazy"
+             src="{{ c.species_photo_url or c.thumb_url }}"
+             {% if c.species_photo_url %}data-fallback="{{ c.thumb_url }}"
+             onerror="this.onerror=null;this.src=this.dataset.fallback;"{% endif %}
              alt="{{ c.label }} detected on {{ c.camera_id }}">
         <div class="meta">
           <span class="label">{{ c.label }}</span>
@@ -125,9 +130,12 @@
     <button class="lb-btn lb-next" aria-label="Next">&#8250;</button>
     <figure class="lb-figure">
       <div class="lb-spinner" id="lbSpinner"></div>
-      <div class="lb-spec" id="lbSpec" hidden>
-        <img id="lbSpecImg" alt="">
-        <div class="playhead" id="lbPlayhead"></div>
+      <div class="lb-audio-media" id="lbAudioMedia" hidden>
+        <img id="lbBirdImg" class="lb-bird" alt="" hidden>
+        <div class="lb-spec" id="lbSpec">
+          <img id="lbSpecImg" alt="">
+          <div class="playhead" id="lbPlayhead"></div>
+        </div>
       </div>
       <img id="lbImg" alt="">
       <audio id="lbAudio" controls hidden></audio>
@@ -178,11 +186,17 @@
         card.dataset.kind = c.source_kind != null ? c.source_kind : "";
         card.dataset.audio = c.audio_url != null ? c.audio_url : "";
         card.dataset.species = c.species_url != null ? c.species_url : "";
+        card.dataset.speciesPhoto = c.species_photo_url != null ? c.species_photo_url : "";
+        card.dataset.spectrogram = c.thumb_url;
 
         const img = document.createElement("img");
         img.className = "thumb";
         img.loading = "lazy";
-        img.src = c.thumb_url;
+        // Bird IDs show the species reference photo, falling back to the spectrogram.
+        img.src = c.species_photo_url || c.thumb_url;
+        if (c.species_photo_url) {
+          img.onerror = () => { img.onerror = null; img.src = c.thumb_url; };
+        }
         img.alt = (c.label || "capture") + " detected on " + (c.camera_id || "camera");
 
         const meta = document.createElement("div");
@@ -334,6 +348,8 @@
       const lbImg = document.getElementById("lbImg");
       const lbCap = document.getElementById("lbCap");
       const lbSpinner = document.getElementById("lbSpinner");
+      const lbAudioMedia = document.getElementById("lbAudioMedia");
+      const lbBirdImg = document.getElementById("lbBirdImg");
       const lbSpec = document.getElementById("lbSpec");
       const lbSpecImg = document.getElementById("lbSpecImg");
       const lbPlayhead = document.getElementById("lbPlayhead");
@@ -370,9 +386,9 @@
 
         stopPlayhead();
         if (isAudio) {
-          // spectrogram + audio player
+          // species photo (if any) + spectrogram + audio player
           lbImg.hidden = true;
-          lbSpec.hidden = false;
+          lbAudioMedia.hidden = false;
           lbAudio.hidden = false;
           lbSpinner.hidden = false;
           lbSpecImg.onload = () => { lbSpinner.hidden = true; };
@@ -380,8 +396,20 @@
           lbSpecImg.src = card.dataset.full;         // the spectrogram image
           lbPlayhead.style.transform = "translateX(0)";
           lbAudio.src = card.dataset.audio || "";
+          const photo = card.dataset.speciesPhoto || "";
+          if (photo) {
+            lbBirdImg.onerror = () => { lbBirdImg.hidden = true; };
+            lbBirdImg.src = photo;
+            lbBirdImg.alt = label;
+            lbBirdImg.hidden = false;
+          } else {
+            lbBirdImg.hidden = true;
+            lbBirdImg.removeAttribute("src");
+          }
         } else {
-          lbSpec.hidden = true;
+          lbAudioMedia.hidden = true;
+          lbBirdImg.hidden = true;
+          lbBirdImg.removeAttribute("src");
           lbAudio.hidden = true;
           lbAudio.pause();
           lbAudio.removeAttribute("src");

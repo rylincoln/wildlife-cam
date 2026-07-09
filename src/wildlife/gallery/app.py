@@ -26,9 +26,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time as _time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
@@ -78,6 +82,45 @@ def _species_url(label: str | None, source_kind: str | None) -> str | None:
         return None
     code = _bird_codes().get(label.strip())
     return f"{_MERLIN_SPECIES_BASE}{code}" if code else None
+
+
+@lru_cache(maxsize=1)
+def _code_to_name() -> dict:
+    """Invert the bird-code table: eBird code -> common name (for photo lookup)."""
+    return {code: name for name, code in _bird_codes().items()}
+
+
+# Reference species photos come from Wikipedia/Wikimedia (free, no key; Macaulay is
+# bot-protected). Fetched once per species and cached on disk (see /species_photo).
+_WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+_WIKI_UA = "wildlife-cam/1.0 (private LAN gallery; species reference thumbnails)"
+_WIKI_THUMB_PX = 480  # preferred render width; only applied if Wikimedia allows it
+
+
+def _fetch_species_photo(common_name: str, timeout: float = 6.0) -> bytes | None:
+    """Fetch a species reference photo (JPEG bytes) from Wikipedia, or ``None``."""
+    try:
+        title = urllib.parse.quote(common_name.replace(" ", "_"), safe="_()")
+        req = urllib.request.Request(_WIKI_SUMMARY + title, headers={"User-Agent": _WIKI_UA})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            summary = json.loads(resp.read())
+        src = (summary.get("thumbnail") or {}).get("source")
+        if not src:
+            return None
+        # Prefer a slightly larger render, but Wikimedia rejects non-standard widths
+        # (HTTP 400), so fall back to the summary's own (always-valid) thumbnail URL.
+        bigger = re.sub(r"/\d+px-", f"/{_WIKI_THUMB_PX}px-", src, count=1)
+        for url in (bigger, src):
+            try:
+                img_req = urllib.request.Request(url, headers={"User-Agent": _WIKI_UA})
+                with urllib.request.urlopen(img_req, timeout=timeout) as resp:
+                    return resp.read()
+            except urllib.error.HTTPError:
+                continue  # bad size -> try the original thumbnail URL
+        return None
+    except Exception:  # noqa: BLE001 - a failed fetch just means "no photo"
+        logger.info("No Wikipedia species photo for %r.", common_name, exc_info=True)
+        return None
 
 # Live-update stream tuning.
 #
@@ -183,6 +226,9 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
 
     storage = config.storage
     captures_dir = Path(storage.captures_dir).resolve()
+    # On-disk cache of per-species reference photos (fetched once from Wikipedia).
+    species_thumbs_dir = captures_dir.parent / "species_thumbs"
+    species_thumbs_dir.mkdir(parents=True, exist_ok=True)
     page_size = config.gallery.page_size
 
     # Bound concurrent live streams: each holds a worker thread + its own SQLite
@@ -376,6 +422,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     def _serialize(row: dict) -> dict:
         """Shape a DB row dict into the JSON/template payload for one capture."""
         cid = row["id"]
+        label = row.get("label")
+        # Bird (audio) captures resolve to an eBird species code, which drives both
+        # the Merlin link and the cached reference photo.
+        code = None
+        if row.get("source_kind") == "audio" and label:
+            code = _bird_codes().get(label.strip())
         return {
             "id": cid,
             "camera_id": row.get("camera_id"),
@@ -395,7 +447,8 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             "image_url": url_for("image", capture_id=cid),
             "source_kind": row.get("source_kind"),
             "audio_url": url_for("audio", capture_id=cid) if row.get("audio_path") else None,
-            "species_url": _species_url(row.get("label"), row.get("source_kind")),
+            "species_url": f"{_MERLIN_SPECIES_BASE}{code}" if code else None,
+            "species_photo_url": url_for("species_photo", code=code) if code else None,
         }
 
     def _query_page(filters: dict, page: int) -> tuple[list[dict], bool]:
@@ -564,6 +617,30 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         if not full.is_file():
             abort(404)
         return send_file(full, mimetype="audio/mp4", conditional=True)
+
+    @app.route("/species_photo/<code>")
+    def species_photo(code: str):
+        """Serve a reference photo for an eBird species code (Wikipedia-sourced).
+
+        Cached on disk after the first fetch; a failed fetch is negatively cached
+        (a ``.miss`` marker) so we don't re-hit Wikipedia on every gallery load.
+        A 404 lets the front-end fall back to the spectrogram thumbnail.
+        """
+        if not code.isalnum() or len(code) > 12:
+            abort(404)
+        cached = species_thumbs_dir / f"{code}.jpg"
+        if cached.is_file():
+            return send_file(cached, mimetype="image/jpeg", conditional=True)
+        if (species_thumbs_dir / f"{code}.miss").is_file():
+            abort(404)
+        common = _code_to_name().get(code)
+        if common:
+            data = _fetch_species_photo(common)
+            if data:
+                cached.write_bytes(data)
+                return send_file(cached, mimetype="image/jpeg", conditional=True)
+        (species_thumbs_dir / f"{code}.miss").write_text("")  # negative-cache
+        abort(404)
 
     def _serve_file(capture_id: int, key: str):
         """Resolve a stored relative path safely and stream the JPEG."""
