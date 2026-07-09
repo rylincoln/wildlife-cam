@@ -26,14 +26,36 @@ class _FakeStructured:
         )
 
 
+class _FakeSession:
+    """Stand-in for a held-open birdnet prediction session (context manager)."""
+
+    def __init__(self):
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, *args):
+        self.exited = True
+        return False
+
+    def run_arrays(self, inp):
+        # one segment, one species above threshold
+        return _FakeStructured([("", "Turdus migratorius_American Robin", 0.82)])
+
+
 class _FakeAcoustic:
     def __init__(self):
         self.last_kwargs = None
+        self.session = None
 
-    def predict_arrays(self, inp, **kwargs):
+    def predict_session(self, **kwargs):
+        # The shortlist/threshold/bandpass are baked into the warm session here.
         self.last_kwargs = kwargs
-        # one segment, one species above threshold
-        return _FakeStructured([("", "Turdus migratorius_American Robin", 0.82)])
+        self.session = _FakeSession()
+        return self.session
 
 
 class _FakeGeo:
