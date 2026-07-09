@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 48000
 WIN_SAMPLES = _SAMPLE_RATE * 3          # 144000  (3.0 s)
-HOP_SAMPLES = _SAMPLE_RATE * 3 // 2     # 72000   (1.5 s hop, 50% overlap)
+# 3.0 s hop (no overlap). BirdNET inference is ~1 s/window via the warm session, so
+# two cameras (one window each per hop) at a 1.5 s hop couldn't keep up (2 windows /
+# 1.5 s > 1 / 1 s) and the stream backed up. A 3 s hop keeps up with headroom.
+HOP_SAMPLES = _SAMPLE_RATE * 3          # 144000  (3.0 s hop)
 _HOP_BYTES = HOP_SAMPLES * 2           # int16
 _INITIAL_BACKOFF_S = 1.0
 _MAX_BACKOFF_S = 30.0

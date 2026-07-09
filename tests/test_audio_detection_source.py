@@ -23,7 +23,7 @@ def _source(**audio_overrides):
 
 def test_window_hop_constants():
     assert WIN_SAMPLES == 144000
-    assert HOP_SAMPLES == 72000
+    assert HOP_SAMPLES == 144000  # 3 s hop (no overlap) so the warm session keeps up
 
 
 def test_confirmed_detection_saves_audio_capture(monkeypatch):

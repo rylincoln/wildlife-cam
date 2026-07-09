@@ -140,13 +140,53 @@ class AudioAnalyzer:
         self._acoustic = birdnet.load("acoustic", "2.4", "tf")
         self._species_list: list[str] | None = None
         self._shortlist_week: int | None = None
+        self._session = None  # warm, held-open prediction session (see _open_session)
         if getattr(cfg, "use_geo_filter", False):
             self._refresh_geo(datetime.now())
+        self._open_session()
         logger.info(
-            "AudioAnalyzer ready (geo_filter=%s, species_shortlist=%s).",
+            "AudioAnalyzer ready (geo_filter=%s, species_shortlist=%s, warm session).",
             getattr(cfg, "use_geo_filter", False),
             "-" if self._species_list is None else len(self._species_list),
         )
+
+    def _open_session(self) -> None:
+        """(Re)open a warm birdnet prediction session held across windows.
+
+        ``predict_arrays`` opens AND tears down the whole producer/worker pipeline
+        on EVERY call (~5 s), which can't keep up with the real-time stream -- the
+        analyzer falls behind, the ffmpeg pipe fills, go2rtc drops the audio, and
+        nothing is ever detected. A held-open session keeps one warm worker so each
+        3 s window runs in ~1 s. Recreated when the weekly geo shortlist changes.
+        This also supersedes the per-call multiprocessing that caused the earlier
+        CPU-saturation and FD churn (now one persistent worker, not a per-call spawn).
+        """
+        self._close_session()
+        session = self._acoustic.predict_session(
+            top_k=_TOP_K,
+            n_workers=1,
+            n_producers=1,
+            default_confidence_threshold=self._cfg.confidence_threshold,
+            bandpass_fmin=self._cfg.bandpass_fmin,
+            custom_species_list=self._species_list,
+        )
+        session.__enter__()  # spawns the warm worker (one-time cost)
+        self._session = session
+
+    def _close_session(self) -> None:
+        """Tear down the warm session + reap its worker (best-effort)."""
+        session = getattr(self, "_session", None)
+        if session is not None:
+            try:
+                session.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                logger.exception("Error closing birdnet session.")
+            self._session = None
+
+    def close(self) -> None:
+        """Reap the warm session; call on worker shutdown."""
+        with self._lock:
+            self._close_session()
 
     def _refresh_geo(self, now: datetime) -> None:
         """(Re)build the geo shortlist when the BirdNET week rolls over.
@@ -162,6 +202,11 @@ class AudioAnalyzer:
             return
         self._species_list = self._build_geo_shortlist(self._birdnet, self._cfg)
         self._shortlist_week = week
+        # The warm session bakes in the species shortlist at creation, so rebuild it
+        # with the new week's list (only when one is already open -- during __init__
+        # the session is opened once after this returns).
+        if getattr(self, "_session", None) is not None:
+            self._open_session()
         logger.info(
             "Geo shortlist refreshed for week %d (%s species).",
             week, "-" if self._species_list is None else len(self._species_list),
@@ -185,20 +230,12 @@ class AudioAnalyzer:
         with self._lock:
             if getattr(cfg, "use_geo_filter", False):
                 self._refresh_geo(datetime.now())  # rebuild ~weekly so the shortlist tracks the season
-            result = self._acoustic.predict_arrays(
-                (np.asarray(pcm, dtype=np.float32), _SAMPLE_RATE),
-                top_k=_TOP_K,
-                default_confidence_threshold=cfg.confidence_threshold,
-                bandpass_fmin=cfg.bandpass_fmin,
-                custom_species_list=self._species_list,
-                # birdnet defaults n_workers=None -> cpu_count() (8 here), spawning an
-                # 8-process TF pool PER 3s window. That's meant for batch-processing
-                # long files; for one short real-time window it just pins all cores and
-                # starves the go2rtc livestream. One worker is plenty and keeps 7 cores free.
-                n_workers=1,
-                n_producers=1,
+            # Reuse the warm session (~1 s/window) instead of predict_arrays, which
+            # would spawn+tear-down the worker pipeline every call (~5 s) and never
+            # keep up with the live stream.
+            result = self._session.run_arrays(
+                (np.asarray(pcm, dtype=np.float32), _SAMPLE_RATE)
             )
-        _purge_birdnet_session_loggers()  # reclaim birdnet 0.2.16's per-call FD/thread/logger leak
         arr = result.to_structured_array()
         out: list[tuple[str, float]] = []
         for row in arr:

@@ -335,6 +335,13 @@ class _Worker:
             except Exception:  # noqa: BLE001 - cleanup must not raise
                 logger.exception("Error stopping an audio source.")
 
+        # Reap the BirdNET warm session's worker process (after its readers stopped).
+        if self._audio_analyzer is not None:
+            try:
+                self._audio_analyzer.close()
+            except Exception:  # noqa: BLE001 - cleanup must not raise
+                logger.exception("Error closing the audio analyzer.")
+
         # Best-effort close of every active source so any thread blocked inside
         # stream() is unblocked. EventSource.close() is optional in the contract.
         with self._sources_lock:
