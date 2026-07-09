@@ -97,7 +97,8 @@
                data-camera="{{ c.camera_id }}"
                data-ts="{{ c.capture_ts }}"
                data-kind="{{ c.source_kind }}"
-               data-audio="{{ c.audio_url or '' }}">
+               data-audio="{{ c.audio_url or '' }}"
+               data-species="{{ c.species_url or '' }}">
         <img class="thumb" loading="lazy" src="{{ c.thumb_url }}"
              alt="{{ c.label }} detected on {{ c.camera_id }}">
         <div class="meta">
@@ -131,6 +132,7 @@
       <img id="lbImg" alt="">
       <audio id="lbAudio" controls hidden></audio>
       <figcaption id="lbCap" class="lb-cap"></figcaption>
+      <a id="lbSpecies" class="lb-species" href="#" target="_blank" rel="noopener" hidden></a>
     </figure>
   </div>
 
@@ -175,6 +177,7 @@
         card.dataset.ts = c.capture_ts != null ? c.capture_ts : "";
         card.dataset.kind = c.source_kind != null ? c.source_kind : "";
         card.dataset.audio = c.audio_url != null ? c.audio_url : "";
+        card.dataset.species = c.species_url != null ? c.species_url : "";
 
         const img = document.createElement("img");
         img.className = "thumb";
@@ -335,6 +338,7 @@
       const lbSpecImg = document.getElementById("lbSpecImg");
       const lbPlayhead = document.getElementById("lbPlayhead");
       const lbAudio = document.getElementById("lbAudio");
+      const lbSpecies = document.getElementById("lbSpecies");
       let currentCard = null;
       let raf = 0;
 
@@ -397,6 +401,17 @@
         lbCap.querySelector(".lb-conf").textContent = conf;
         lbCap.querySelector(".lb-cam").textContent = cam;
         lbCap.querySelector(".lb-ts").textContent = ts;
+
+        // Species link (audio/bird captures only): deep-link to Merlin.
+        const speciesUrl = card.dataset.species || "";
+        if (speciesUrl) {
+          lbSpecies.href = speciesUrl;
+          lbSpecies.textContent = "View " + label + " on Merlin ↗";
+          lbSpecies.hidden = false;
+        } else {
+          lbSpecies.hidden = true;
+          lbSpecies.removeAttribute("href");
+        }
 
         lb.hidden = false;
         document.body.classList.add("noscroll");

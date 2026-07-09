@@ -715,3 +715,13 @@ body.admin { padding-bottom: 60px; }
   .live-dot.live-on .live-pip { animation: none; }
   .card.card-new { animation: none; }
 }
+
+/* --- Species link (Merlin) in the audio-capture lightbox --- */
+.lb-species {
+  display: inline-block; margin-top: 10px; padding: 7px 14px;
+  color: var(--text); background: var(--bg-elev-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); text-decoration: none; font-size: 13px; font-weight: 650;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.lb-species:hover { border-color: var(--accent); color: var(--accent); }
+.lb-species[hidden] { display: none; }
