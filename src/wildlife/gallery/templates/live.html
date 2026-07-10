@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e1116">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f6f9">
   <title>Wildlife Live{% if single and cameras %} &middot; {{ cameras[0].id }}{% endif %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
