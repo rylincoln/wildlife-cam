@@ -53,8 +53,16 @@ body.noscroll {
 .brand {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+/* When the brand row is the only child of the topbar (Live + Admin, which have
+   no filter form under it), drop its trailing margin so the sticky header
+   doesn't waste ~12px of a short phone viewport. */
+.topbar > .brand:last-child {
+  margin-bottom: 0;
 }
 
 .brand-mark {
@@ -72,6 +80,7 @@ body.noscroll {
 .nav {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-left: auto;
 }
@@ -214,6 +223,14 @@ main {
   cursor: zoom-in;
   aspect-ratio: 4 / 3;
   transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  /* The whole card is a tap-to-open target: kill the iOS gray tap flash, the
+     long-press "Save Image"/callout menu, and accidental text selection so it
+     behaves like a button on touch. (All inert on mouse desktop.) */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .card:hover {
@@ -313,6 +330,10 @@ main {
   margin: 0;
   max-width: min(94vw, 1400px);
   max-height: 92vh;
+  max-height: 92dvh; /* track the visible viewport under mobile browser chrome */
+  overflow-y: auto; /* tall audio captions/players stay reachable, don't clip */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -321,6 +342,7 @@ main {
 #lbImg {
   max-width: 100%;
   max-height: 84vh;
+  max-height: 84dvh;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   opacity: 0;
@@ -379,6 +401,10 @@ main {
   align-items: center;
   justify-content: center;
   transition: background 0.15s ease, transform 0.05s ease;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
 }
 
 .lb-btn:hover {
@@ -472,6 +498,11 @@ main {
 }
 
 .live-title-link {
+  /* Negative margin keeps the visual position while enlarging the tap target
+     (the only way into a camera's expanded view in the multi-camera grid). */
+  display: inline-block;
+  padding: 8px;
+  margin: -8px;
   color: var(--text);
   text-decoration: none;
 }
@@ -521,6 +552,13 @@ main {
 
 /* ----------------------------- Responsive ----------------------------- */
 @media (max-width: 640px) {
+  /* The whole header (brand + nav + the 7-field filter form) scrolls away
+     rather than pinning — as a sticky bar the wrapped filters ate ~half the
+     phone viewport and never scrolled off. */
+  .topbar {
+    position: static;
+  }
+
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 10px;
@@ -535,12 +573,66 @@ main {
     width: 120px;
   }
 
+  /* ----- Touch targets: >=44px on the primary controls ----- */
+  /* Nav drops to its own full-width row(s) below the brand instead of
+     overflowing (esp. the admin bar's 6 links). */
+  .nav {
+    width: 100%;
+    margin-left: 0;
+    gap: 8px;
+  }
+
+  .nav-link {
+    min-height: 44px;
+    padding: 10px 14px;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+  }
+
+  .btn,
+  .field select,
+  .field input[type="date"] {
+    min-height: 44px;
+  }
+
+  .seg-btn {
+    min-height: 44px;
+    padding: 11px 16px;
+    font-size: 13px;
+  }
+
+  /* Filter Apply/Reset span the row as two big, well-separated targets. */
+  .field.actions {
+    flex-basis: 100%;
+  }
+
+  .field.actions .btn {
+    flex: 1;
+  }
+
+  /* Lightbox: move prev/next off the image edges into the bottom corners
+     (centered at the sides, they sat right over the subject on a phone). */
+  .lb-prev,
+  .lb-next {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    transform: none;
+  }
+
   .lb-prev {
-    left: 8px;
+    left: 14px;
   }
 
   .lb-next {
-    right: 8px;
+    right: 14px;
+  }
+
+  /* Re-assert :active here so the shared translateY(-50%) rule doesn't make the
+     button jump up on tap now that it lives at the bottom. */
+  .lb-prev:active,
+  .lb-next:active {
+    transform: scale(0.94);
   }
 }
 
@@ -639,6 +731,7 @@ body.admin { padding-bottom: 60px; }
   padding: 10px 14px;
   background: var(--bg-elev-2);
   font-size: 14px;
+  overflow-wrap: anywhere; /* long rtsp://user:pass@host/... URLs wrap on phones */
 }
 .test-result.testing { border-color: var(--accent); }
 .test-result.good { border-color: var(--good); }
@@ -655,7 +748,9 @@ body.admin { padding-bottom: 60px; }
 .card-actions form { display: flex; gap: 4px; margin: 0; }
 .card-actions select { max-width: 130px; }
 
-.bulk-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap;
+/* Static, not sticky: as a sticky bar at top:0 it was painted under the
+   higher-z sticky .topbar (also top:0) and its actions became untappable. */
+.bulk-toolbar { display: flex; flex-wrap: wrap;
   align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 12px;
   background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .bulk-toolbar .select-note { margin-left: auto; }
@@ -718,7 +813,8 @@ body.admin { padding-bottom: 60px; }
 
 /* --- Species link (Merlin) in the audio-capture lightbox --- */
 .lb-species {
-  display: inline-block; margin-top: 10px; padding: 7px 14px;
+  display: inline-flex; align-items: center; min-height: 44px;
+  margin-top: 10px; padding: 10px 16px;
   color: var(--text); background: var(--bg-elev-2); border: 1px solid var(--border);
   border-radius: var(--radius-sm); text-decoration: none; font-size: 13px; font-weight: 650;
   transition: border-color 0.12s ease, color 0.12s ease;
@@ -733,7 +829,92 @@ body.admin { padding-bottom: 60px; }
 }
 .lb-audio-media[hidden] { display: none; }
 .lb-bird {
-  max-height: 60vh; max-width: min(46vw, 520px); object-fit: contain;
+  max-height: 60vh; max-height: 60dvh; max-width: min(46vw, 520px); object-fit: contain;
   border-radius: var(--radius); box-shadow: var(--shadow); background: var(--bg-elev);
 }
 .lb-bird[hidden] { display: none; }
+
+/* ============================================================================
+   Mobile overrides placed LAST so they beat the equal-specificity base rules
+   defined above (admin section + audio-lightbox media). Do not move earlier.
+   ============================================================================ */
+@media (max-width: 640px) {
+  /* Audio-capture lightbox: cap the stacked media by height so the <audio>
+     player and the "View on Merlin" link stay on-screen (figure now scrolls). */
+  .lb-bird { max-height: 30dvh; }
+  .lb-spec img { max-height: 26dvh; width: auto; }
+
+  /* --- Admin captures: stack image -> caption -> action bar. The bar used to be
+         an absolutely-pinned <select> + Relabel + Delete that overflowed and got
+         clipped by the ~170px card, hiding Delete and the caption behind it. --- */
+  body.admin .card { aspect-ratio: auto; }
+  body.admin .card .thumb { aspect-ratio: 4 / 3; height: auto; }
+  body.admin .card .meta {
+    position: static;
+    padding: 8px 10px;
+    background: none;
+  }
+  body.admin .card-actions {
+    position: static;
+    flex-wrap: wrap;
+    background: var(--bg-elev-2);
+  }
+  body.admin .card-actions form { flex: 1 1 100%; flex-wrap: wrap; min-width: 0; }
+  body.admin .card-actions select { max-width: none; flex: 1 1 100%; min-width: 0; }
+  body.admin .card-actions .btn { flex: 1 1 100%; min-height: 44px; }
+
+  /* Enlarge the bulk-select checkbox on the small cards. */
+  .card .select-box {
+    top: 6px;
+    left: 6px;
+    width: 30px;
+    height: 30px;
+    accent-color: var(--accent);
+  }
+
+  /* Bulk toolbar: compact rows — [select-all + count] / [dropdown] / [buttons]. */
+  .bulk-toolbar { gap: 8px; }
+  .bulk-toolbar .select-note { display: none; }
+  .bulk-toolbar #selCount { margin-left: auto; }
+  .bulk-toolbar #bulkLabel { flex: 1 1 100%; }
+  .bulk-toolbar .btn { flex: 1 1 0; min-height: 44px; }
+
+  /* Cameras table: stack each row into a labeled block (kills the horizontal
+     page scroll from the 4-column table + Edit/Delete action cell). */
+  .admin-table thead { display: none; }
+  .admin-table tr {
+    display: block;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .admin-table td { display: block; border: 0; padding: 3px 0; }
+  .admin-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .admin-table td.row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+  }
+}
+
+/* iOS Safari auto-zooms the page when a focused form control's font-size is
+   < 16px. Scope to touch pointers so mouse desktop keeps its 15px density while
+   phones AND iPads are covered. The attribute selectors match the base rules'
+   specificity; this block's later position makes it win. */
+@media (pointer: coarse) {
+  .field select,
+  .field input[type="date"],
+  .card-actions select,
+  .bulk-toolbar select,
+  .admin-form input[type="text"],
+  .admin-form input[type="password"],
+  .admin-form input[type="number"],
+  .admin-form select,
+  .admin-form textarea {
+    font-size: 16px;
+  }
+}
