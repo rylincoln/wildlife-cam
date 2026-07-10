@@ -304,6 +304,10 @@ class AudioConfig(BaseModel):
     confirm_window_s: float = Field(default=15.0, ge=0.0)
     cooldown_s: float = Field(default=30.0, ge=0.0)
     active_hours: str = ""  # optional "HH:MM-HH:MM" local; empty = 24/7
+    # De-wind the SAVED playback clip only (detection already ran on raw audio, so
+    # this can be aggressive). ffmpeg -af chain applied when encoding the .m4a; blank
+    # = save raw. Default: high-pass rumble + adaptive denoise + boost the faint call.
+    clip_audio_filter: str = "highpass=f=200,afftdn=nr=20:nf=-25,speechnorm=e=25:r=0.0005"
 
     @field_validator("active_hours")
     @classmethod

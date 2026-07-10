@@ -67,6 +67,7 @@ class AudioDetectionSource:
         self._rtsp_port = _parse_port(config.livestream.rtsp_listen)
         self._active_window = _parse_active_hours(cc.active_hours)
         self._confirmer = RepeatConfirmer(cc.min_confirmations, cc.confirm_window_s, cc.cooldown_s)
+        self._clip_filter = (getattr(cc, "clip_audio_filter", "") or "").strip()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._proc: subprocess.Popen | None = None
@@ -173,9 +174,14 @@ class AudioDetectionSource:
         fd, tmp = tempfile.mkstemp(suffix=".m4a")
         os.close(fd)
         try:
+            # De-wind the playback clip (detection already ran on the raw window, so
+            # this only affects what a human hears): high-pass rumble + adaptive
+            # denoise + boost the faint call. Blank filter -> encode raw.
+            af = ["-af", self._clip_filter] if self._clip_filter else []
             subprocess.run(
                 ["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
                  "-f", "s16le", "-ar", str(_SAMPLE_RATE), "-ac", "1", "-i", "-",
+                 *af,
                  "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp],
                 input=pcm16, check=True, timeout=15,
             )
