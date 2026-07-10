@@ -42,5 +42,8 @@ logs/
 # test-mode workspace (scripts/run_demo.sh)
 /.demo/
 
+# Mobile UI screenshots (scripts/mobile_screenshots.py output)
+/screenshots/
+
 # Ultralytics training outputs (checkpoints, weights, plots)
 runs/
