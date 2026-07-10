@@ -64,6 +64,12 @@ dev = [
     "pytest>=8",
     "ruff>=0.4",
 ]
+# Headless-browser screenshots of the gallery at phone viewports (UI review).
+# After installing, fetch the browser: `python -m playwright install chromium`.
+# See scripts/mobile_screenshots.py.
+screenshots = [
+    "playwright>=1.40",
+]
 
 [project.scripts]
 wildlife-worker = "wildlife.worker:main"

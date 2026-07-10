@@ -163,6 +163,30 @@ thumbnail to load the full image; audio detections open a playable spectrogram.
 > LAN-only use (like the media-server UI on the same machine). Do **not** expose
 > it to the internet without adding auth + TLS in front of it.
 
+#### Mobile screenshots (UI review)
+
+To eyeball the gallery at a phone viewport without a physical device, there's a
+Playwright-driven helper. One-time setup:
+
+```bash
+uv pip install --python .venv/bin/python playwright   # or: pip install -e '.[screenshots]'
+.venv/bin/python -m playwright install chromium        # fetch the headless browser
+```
+
+Then, against a running gallery:
+
+```bash
+# public views (gallery + lightbox + live) -> ./screenshots/ (gitignored)
+.venv/bin/python scripts/mobile_screenshots.py
+
+# include the /admin views, or pick another device profile
+.venv/bin/python scripts/mobile_screenshots.py --admin-user admin --admin-pass 'secret'
+.venv/bin/python scripts/mobile_screenshots.py --device "Pixel 7"   # --device ? to list
+```
+
+It defaults to the machine's LAN IP (loopback 404s when `remote.enabled`). See the
+script's `--help` for options.
+
 ---
 
 ## Live view (optional)
