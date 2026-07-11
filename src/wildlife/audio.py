@@ -21,7 +21,7 @@ from PIL import Image
 
 from wildlife._colormap import MAGMA_LUT
 
-__all__ = ["render_spectrogram", "AudioAnalyzer"]
+__all__ = ["render_spectrogram", "signal_quality", "AudioAnalyzer"]
 
 # STFT params for a 3s / 48kHz window: ~560 columns, 46.9 Hz/bin.
 _N_FFT = 1024
@@ -29,6 +29,11 @@ _HOP = 256
 _FMAX_HZ = 12000  # crop above this (bird band); avoids an empty top third
 _DB_FLOOR = 80.0
 _OUT_HEIGHT = 256
+
+# Band for the SNR quality metric: skip sub-1 kHz wind/rumble; the 16 kHz mic holds
+# no bird energy above ~8 kHz, so 1–8 kHz brackets the call band.
+_SNR_FMIN_HZ = 1000.0
+_SNR_FMAX_HZ = 8000.0
 
 
 def render_spectrogram(pcm: np.ndarray, sr: int = 48000) -> np.ndarray:
@@ -64,6 +69,44 @@ def render_spectrogram(pcm: np.ndarray, sr: int = 48000) -> np.ndarray:
     new_w = max(1, round(pil.width * _OUT_HEIGHT / pil.height))
     pil = pil.resize((new_w, _OUT_HEIGHT), Image.LANCZOS)
     return np.asarray(pil)
+
+
+def signal_quality(pcm: np.ndarray, sr: int = 48000) -> float:
+    """Estimate a mono window's call clarity as a band-limited SNR in dB.
+
+    Frames the signal, sums magnitude energy in the bird band (1–8 kHz) per frame,
+    then returns ``10*log10(peak-frame energy / noise-floor energy)`` where the noise
+    floor is the median frame energy (the between-call background, which dominates the
+    frame count) and the peak is the 95th-percentile frame (the loudest call energy).
+
+    A clear call standing out from a quiet background scores high; steady broadband
+    noise (wind, rain) has peak ≈ floor and scores near 0. Deterministic, numpy-only —
+    used to pick the *clearest-sounding* sample among a species' repeats, whereas
+    BirdNET confidence gates *which* detections count as the bird at all.
+    """
+    x = np.asarray(pcm, dtype=np.float32)
+    if x.size < _N_FFT:
+        return 0.0
+    peak = float(np.max(np.abs(x)))
+    if peak > 1.0:  # int16-scaled input -> normalize (scale cancels in the ratio anyway)
+        x = x / 32768.0
+
+    window = np.hanning(_N_FFT).astype(np.float32)
+    frames = np.lib.stride_tricks.sliding_window_view(x, _N_FFT)[::_HOP]
+    mag = np.abs(np.fft.rfft(frames * window, axis=-1))  # (frames, n_fft/2+1)
+
+    freqs = np.fft.rfftfreq(_N_FFT, 1.0 / sr)
+    band = (freqs >= _SNR_FMIN_HZ) & (freqs <= _SNR_FMAX_HZ)
+    if not band.any():
+        return 0.0
+    energy = (mag[:, band] ** 2).sum(axis=1)  # per-frame in-band energy
+    if energy.size == 0:
+        return 0.0
+
+    eps = 1e-12
+    floor = float(np.median(energy)) + eps
+    signal = float(np.percentile(energy, 95)) + eps
+    return 10.0 * float(np.log10(signal / floor))
 
 
 logger = logging.getLogger(__name__)

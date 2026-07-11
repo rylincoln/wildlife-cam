@@ -22,8 +22,8 @@ from datetime import datetime
 
 import numpy as np
 
-from wildlife.audio import render_spectrogram
-from wildlife.audio_gate import RepeatConfirmer
+from wildlife.audio import render_spectrogram, signal_quality
+from wildlife.audio_gate import SpeciesDeduper
 
 __all__ = ["AudioDetectionSource", "WIN_SAMPLES", "HOP_SAMPLES"]
 
@@ -89,7 +89,7 @@ class AudioDetectionSource:
                 "Camera %s: audio species-hour windows active: %s",
                 self._camera.id, dict(cc.species_hours),
             )
-        self._confirmer = RepeatConfirmer(cc.min_confirmations, cc.confirm_window_s, cc.cooldown_s)
+        self._deduper = SpeciesDeduper(cc.min_confirmations, cc.confirm_window_s, cc.dedup_window_s)
         self._clip_filter = (getattr(cc, "clip_audio_filter", "") or "").strip()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -159,13 +159,19 @@ class AudioDetectionSource:
         """Analyze one window; on a confirmed species, render+encode+save."""
         if not self._within_active_hours(now):
             return
+        quality: float | None = None  # SNR of this window; computed once, lazily
         for species, conf in self._analyzer.analyze(pcm):
-            # Drop out-of-hours species BEFORE the confirmer so nocturnal insect
+            # Drop out-of-hours species BEFORE the deduper so nocturnal insect
             # noise never even accumulates toward a same-species confirmation.
             if not self._species_within_hours(species, now):
                 continue
-            if not self._confirmer.offer(species, conf, now):
-                continue
+            # Rank the bout's samples by clip SNR (clearest wins), not by BirdNET
+            # confidence — confidence already gated which detections got here.
+            if quality is None:
+                quality = signal_quality(pcm, _SAMPLE_RATE)
+            decision = self._deduper.offer(species, quality, now)
+            if not decision.save:
+                continue  # noise still confirming, or not clearer than the bout's best
             try:
                 spec_rgb = render_spectrogram(pcm, _SAMPLE_RATE)
             except Exception:  # noqa: BLE001 - a bad render skips the detection
@@ -176,9 +182,11 @@ class AudioDetectionSource:
                 clip = self._encode_clip(pcm)
             except Exception:  # noqa: BLE001 - save w/o clip rather than lose the detection
                 logger.warning("Camera %s: clip encode failed; saving without audio.", self._camera.id)
-            self._store.save_audio_capture(
+            new_id = self._store.save_audio_capture(
                 camera_id=self._camera.id,
-                event_ts=now,
+                # event_ts = when the bout began (stable across replacements);
+                # capture_ts = when this best sample was actually saved.
+                event_ts=decision.bout_start or now,
                 capture_ts=datetime.now(),
                 species=species,
                 confidence=conf,
@@ -186,7 +194,23 @@ class AudioDetectionSource:
                 clip_bytes=clip,
                 source_kind="audio",
             )
-            logger.info("Camera %s: audio detection %s (%.2f) saved.", self._camera.id, species, conf)
+            # This detection is the best of the bout so far; drop the earlier,
+            # lower-quality sample it supersedes (delete AFTER the new save lands so
+            # a save failure never loses the previous capture).
+            if decision.replace_id is not None:
+                try:
+                    self._store.delete(decision.replace_id)
+                except Exception:  # noqa: BLE001 - orphan row is harmless vs losing the thread
+                    logger.warning(
+                        "Camera %s: failed to delete superseded capture %s.",
+                        self._camera.id, decision.replace_id,
+                    )
+            self._deduper.commit(species, new_id, quality, now)
+            logger.info(
+                "Camera %s: audio detection %s (conf %.2f, snr %.1fdB) saved id=%d%s.",
+                self._camera.id, species, conf, quality, new_id,
+                f" (replaced {decision.replace_id})" if decision.replace_id is not None else "",
+            )
 
     # -- ffmpeg (hardware; not unit-tested) -------------------------------
     def _decode_cmd(self) -> list[str]:

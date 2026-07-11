@@ -302,7 +302,7 @@ class AudioConfig(BaseModel):
     bandpass_fmin: int = Field(default=0, ge=0)  # Hz; raise to band-limit low-freq wind
     min_confirmations: int = Field(default=2, ge=1)
     confirm_window_s: float = Field(default=15.0, ge=0.0)
-    cooldown_s: float = Field(default=30.0, ge=0.0)
+    dedup_window_s: float = Field(default=900.0, ge=0.0)  # keep only the best (highest-confidence) sample per species within this window; 0 disables consolidation
     active_hours: str = ""  # optional "HH:MM-HH:MM" local; empty = 24/7
     # De-wind the SAVED playback clip only (detection already ran on raw audio, so
     # this can be aggressive). ffmpeg -af chain applied when encoding the .m4a; blank
