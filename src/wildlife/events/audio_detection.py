@@ -55,6 +55,14 @@ def _parse_active_hours(spec: str) -> tuple[int, int] | None:
     return (sh * 60 + sm, eh * 60 + em)
 
 
+def _in_window(cur_min: int, window: tuple[int, int]) -> bool:
+    """True if minute-of-day ``cur_min`` falls in ``window`` (wraps if start > end)."""
+    start, end = window
+    if start <= end:
+        return start <= cur_min < end
+    return cur_min >= start or cur_min < end
+
+
 class AudioDetectionSource:
     """Analyze one camera's audio and save confirmed bird detections directly."""
 
@@ -66,6 +74,21 @@ class AudioDetectionSource:
         self._stream = cc.stream
         self._rtsp_port = _parse_port(config.livestream.rtsp_listen)
         self._active_window = _parse_active_hours(cc.active_hours)
+        # Per-species local windows: a species is dropped outside its own window.
+        self._species_windows = {
+            name: w
+            for name, spec in (getattr(cc, "species_hours", None) or {}).items()
+            if (w := _parse_active_hours(spec)) is not None
+        }
+        if self._species_windows:
+            # Log the raw config so a mistyped key (must equal BirdNET's exact common
+            # name, e.g. "Canyon Wren") is visible, and so it's clear which species
+            # are gated — noise that re-labels onto an UNlisted diurnal species at
+            # night would still slip through until added here.
+            logger.info(
+                "Camera %s: audio species-hour windows active: %s",
+                self._camera.id, dict(cc.species_hours),
+            )
         self._confirmer = RepeatConfirmer(cc.min_confirmations, cc.confirm_window_s, cc.cooldown_s)
         self._clip_filter = (getattr(cc, "clip_audio_filter", "") or "").strip()
         self._stop = threading.Event()
@@ -116,17 +139,31 @@ class AudioDetectionSource:
     def _within_active_hours(self, now_wall: datetime) -> bool:
         if self._active_window is None:
             return True
-        start, end = self._active_window
         cur = now_wall.hour * 60 + now_wall.minute
-        if start <= end:
-            return start <= cur < end
-        return cur >= start or cur < end
+        return _in_window(cur, self._active_window)
+
+    def _species_within_hours(self, species: str, now_wall: datetime) -> bool:
+        """False when ``species`` has a configured window and ``now`` is outside it.
+
+        Diurnal birds get labelled onto nocturnal insect stridulation (Canyon Wren
+        at 4 a.m. = crickets). A per-species window drops those without muting
+        genuinely nocturnal callers (owls, nighthawks), which carry no window.
+        """
+        window = self._species_windows.get(species)
+        if window is None:
+            return True
+        cur = now_wall.hour * 60 + now_wall.minute
+        return _in_window(cur, window)
 
     def _process_window(self, pcm: np.ndarray, now: datetime) -> None:
         """Analyze one window; on a confirmed species, render+encode+save."""
         if not self._within_active_hours(now):
             return
         for species, conf in self._analyzer.analyze(pcm):
+            # Drop out-of-hours species BEFORE the confirmer so nocturnal insect
+            # noise never even accumulates toward a same-species confirmation.
+            if not self._species_within_hours(species, now):
+                continue
             if not self._confirmer.offer(species, conf, now):
                 continue
             try:
