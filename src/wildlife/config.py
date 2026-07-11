@@ -308,6 +308,14 @@ class AudioConfig(BaseModel):
     # this can be aggressive). ffmpeg -af chain applied when encoding the .m4a; blank
     # = save raw. Default: high-pass rumble + adaptive denoise + boost the faint call.
     clip_audio_filter: str = "highpass=f=200,afftdn=nr=20:nf=-25,speechnorm=e=25:r=0.0005"
+    # Per-species local active window "HH:MM-HH:MM"; a detection of that species is
+    # DROPPED outside it. For diurnal birds whose only nocturnal "detections" are
+    # insect stridulation — e.g. {"Canyon Wren": "06:00-21:00"} silences the 4 a.m.
+    # cricket/katydid noise BirdNET keeps labelling Canyon Wren (up to 0.93 conf, so
+    # a confidence gate can't separate them — the clock can). Unlisted species run
+    # 24/7, so genuinely nocturnal callers (owls, nighthawks) are untouched. A wrap
+    # (start>end) spans midnight, matching active_hours.
+    species_hours: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("active_hours")
     @classmethod
@@ -324,6 +332,23 @@ class AudioConfig(BaseModel):
             if not (0 <= hh <= 23 and 0 <= mm <= 59):
                 raise ValueError("active_hours has an out-of-range time")
         return value
+
+    @field_validator("species_hours")
+    @classmethod
+    def _validate_species_hours(cls, value: dict[str, str]) -> dict[str, str]:
+        """Each value must be a strict "HH:MM-HH:MM" 24-hour window (no blanks)."""
+        cleaned: dict[str, str] = {}
+        for name, window in value.items():
+            w = window.strip()
+            m = re.fullmatch(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", w)
+            if not m:
+                raise ValueError(f'species_hours[{name!r}] must be "HH:MM-HH:MM"')
+            sh, sm, eh, em = (int(g) for g in m.groups())
+            for hh, mm in ((sh, sm), (eh, em)):
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    raise ValueError(f"species_hours[{name!r}] has an out-of-range time")
+            cleaned[name.strip()] = w
+        return cleaned
 
     @model_validator(mode="after")
     def _geo_needs_coords(self) -> "AudioConfig":

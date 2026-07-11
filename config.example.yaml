@@ -114,6 +114,7 @@ audio: # optional BirdNET audio bird-ID (CPU-side; needs the go2rtc daemon + cam
   confirm_window_s: 15
   cooldown_s: 30 # per-species suppression after a save
   active_hours: "" # optional "HH:MM-HH:MM" local; empty = 24/7
+  species_hours: {} # per-species local "HH:MM-HH:MM"; drop a species outside its window. For diurnal birds whose nocturnal "detections" are insect stridulation, e.g. {"Canyon Wren": "05:00-21:00"}. Unlisted species (owls/nighthawks) stay 24/7.
   clip_audio_filter: "highpass=f=200,afftdn=nr=20:nf=-25,speechnorm=e=25:r=0.0005" # de-wind the SAVED playback clip only (detection runs on raw audio); ffmpeg -af chain. "" = save raw
 
 megadetector: # optional MegaDetector v6 second pass over the species detector (per-event)

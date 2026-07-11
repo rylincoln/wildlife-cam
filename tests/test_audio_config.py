@@ -19,6 +19,7 @@ def test_audio_defaults_are_inert():
     assert a.confirm_window_s == 15.0
     assert a.cooldown_s == 30.0
     assert a.active_hours == ""
+    assert a.species_hours == {}
 
 
 def test_audio_rejects_bad_values():
@@ -67,6 +68,18 @@ def test_boundary_values_accepted():
     ok = AudioConfig(use_geo_filter=True, latitude=90.0, longitude=-180.0)
     assert ok.latitude == 90.0 and ok.longitude == -180.0
     assert AudioConfig(active_hours="22:00-06:00").active_hours == "22:00-06:00"
+
+
+def test_species_hours_validation():
+    a = AudioConfig(species_hours={"Canyon Wren": "05:00-21:00"})
+    assert a.species_hours["Canyon Wren"] == "05:00-21:00"
+    assert AudioConfig().species_hours == {}
+    with pytest.raises(ValidationError):
+        AudioConfig(species_hours={"Canyon Wren": "5:00-21:00"})   # missing leading zero
+    with pytest.raises(ValidationError):
+        AudioConfig(species_hours={"Canyon Wren": "25:00-21:00"})  # hour out of range
+    with pytest.raises(ValidationError):
+        AudioConfig(species_hours={"Canyon Wren": ""})             # blank not allowed
 
 
 def test_disabled_config_may_omit_coords_even_with_geo_on():
