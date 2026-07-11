@@ -141,7 +141,7 @@
         </div>
       </div>
       <img id="lbImg" alt="">
-      <audio id="lbAudio" controls hidden></audio>
+      <audio id="lbAudio" controls loop hidden></audio>
       <figcaption id="lbCap" class="lb-cap"></figcaption>
       <a id="lbSpecies" class="lb-species" href="#" target="_blank" rel="noopener" hidden></a>
     </figure>
@@ -362,18 +362,29 @@
       let raf = 0;
 
       function stopPlayhead() { if (raf) cancelAnimationFrame(raf); raf = 0; }
-      function tickPlayhead() {
+      // Paint the playhead once at the current audio position.
+      function paintPlayhead() {
         const d = lbAudio.duration;
         if (d && lbSpecImg.clientWidth) {
           lbPlayhead.style.transform =
             "translateX(" + (lbAudio.currentTime / d) * lbSpecImg.clientWidth + "px)";
         }
-        raf = requestAnimationFrame(tickPlayhead);
       }
-      lbAudio.addEventListener("play", () => { stopPlayhead(); raf = requestAnimationFrame(tickPlayhead); });
+      // Animation loop: repaint the playhead every frame while the clip plays.
+      function tickPlayhead() { paintPlayhead(); raf = requestAnimationFrame(tickPlayhead); }
+      // Start the loop; the guard keeps us to a single chain (never two at once).
+      function startPlayhead() { if (!raf) raf = requestAnimationFrame(tickPlayhead); }
+      lbAudio.addEventListener("play", startPlayhead);
       lbAudio.addEventListener("pause", stopPlayhead);
       lbAudio.addEventListener("ended", stopPlayhead);
-      lbAudio.addEventListener("seeked", tickPlayhead);
+      // A seek fires when the user scrubs and when the clip loops back to 0 (lbAudio
+      // has `loop`). Repaint now; and if we're mid-playback but the chain has died —
+      // some browsers fire `ended` (which stops it) right before the loop restart —
+      // revive it. The single-chain guard means loops never pile up extra RAFs.
+      lbAudio.addEventListener("seeked", () => {
+        paintPlayhead();
+        if (!lbAudio.paused) startPlayhead();
+      });
 
       function cards() {
         return Array.from(grid.querySelectorAll(".card"));
