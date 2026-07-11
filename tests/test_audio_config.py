@@ -17,7 +17,7 @@ def test_audio_defaults_are_inert():
     assert a.bandpass_fmin == 0
     assert a.min_confirmations == 2
     assert a.confirm_window_s == 15.0
-    assert a.cooldown_s == 30.0
+    assert a.dedup_window_s == 900.0
     assert a.active_hours == ""
     assert a.species_hours == {}
 
@@ -31,6 +31,8 @@ def test_audio_rejects_bad_values():
         AudioConfig(bandpass_fmin=-1)
     with pytest.raises(ValidationError):
         AudioConfig(min_confirmations=0)
+    with pytest.raises(ValidationError):
+        AudioConfig(dedup_window_s=-1)
     with pytest.raises(ValidationError):
         AudioConfig(active_hours="25:00-06:00")
 
