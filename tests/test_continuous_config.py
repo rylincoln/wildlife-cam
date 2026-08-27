@@ -108,3 +108,31 @@ def test_motion_mask_rejects_short_polygon_and_out_of_range_points():
         CameraConfig(**_camera(motion_mask=[[[0.0, 0.0], [1.0, 1.0]]]))  # only 2 points
     with pytest.raises(ValidationError):
         CameraConfig(**_camera(motion_mask=[[[0.0, 0.0], [1.0, 0.0], [1.5, 1.0]]]))  # x>1
+
+
+def test_ignore_zones_defaults_none_and_accepts_valid_polygons():
+    assert CameraConfig(**_camera()).ignore_zones is None
+    cam = CameraConfig(
+        **_camera(ignore_zones=[[[0.0, 0.55], [0.16, 0.55], [0.16, 1.0], [0.0, 1.0]]])
+    )
+    assert cam.ignore_zones == [[(0.0, 0.55), (0.16, 0.55), (0.16, 1.0), (0.0, 1.0)]]
+
+
+def test_ignore_zones_rejects_short_polygon_and_out_of_range_points():
+    with pytest.raises(ValidationError):
+        CameraConfig(**_camera(ignore_zones=[[[0.0, 0.0], [1.0, 1.0]]]))  # 2 points
+    with pytest.raises(ValidationError):
+        CameraConfig(**_camera(ignore_zones=[[[0.0, 0.0], [1.0, 0.0], [1.5, 1.0]]]))  # x>1
+
+
+def test_max_saturated_frac_default_and_bounds():
+    from wildlife.config import DetectionConfig
+
+    base = dict(
+        model_path="m", device="cpu", animal_classes=["bird"],
+        confidence_threshold=0.4, min_box_area_frac=0.01, save_best_only=False,
+    )
+    assert DetectionConfig(**base).max_saturated_frac == 0.20
+    assert DetectionConfig(**base, max_saturated_frac=1.0).max_saturated_frac == 1.0
+    with pytest.raises(ValidationError):
+        DetectionConfig(**base, max_saturated_frac=1.5)

@@ -90,6 +90,7 @@ def _is_blank_frame(frame) -> bool:
 _BLOB_BRIGHT_LEVEL = 200  # 0-255; a "bright" pixel (IR-lit blob / animal)
 _BLOB_MIN_BRIGHT_PIX = 100  # need a real bright region before judging focus
 _BLOB_MIN_SHARPNESS = 60.0  # bright-region Laplacian variance below this = defocused blob
+_BLOB_SAT_LEVEL = 245  # 0-255; a "saturated" (blown-out) pixel — an IR-bloom core
 
 
 def _is_defocused_blob(frame, box) -> bool:
@@ -113,6 +114,69 @@ def _is_defocused_blob(frame, box) -> bool:
         return float(lap[bright].var()) < _BLOB_MIN_SHARPNESS
     except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
         return False
+
+
+def _saturated_fraction(frame, box) -> float:
+    """Fraction of near-saturated (blown-out) pixels inside ``box``.
+
+    An IR bloom (an insect/dew at the illuminator) saturates the sensor into a large
+    pure-white patch, which the defocus check misses when the box also holds sharp
+    bright foliage. This measures the blow-out directly. Returns 0.0 on any error."""
+    try:
+        import cv2
+        import numpy as np
+
+        h, w = frame.shape[:2]
+        x1 = max(0, int(box[0])); y1 = max(0, int(box[1]))
+        x2 = min(w, int(box[2])); y2 = min(h, int(box[3]))
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            return 0.0
+        gray = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+        return float((gray >= _BLOB_SAT_LEVEL).mean())
+    except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
+        return 0.0
+
+
+def _point_in_poly(x: float, y: float, poly) -> bool:
+    """Ray-casting point-in-polygon test on normalised (0..1) coordinates."""
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _box_center_in_zones(box, frame_shape, zones) -> bool:
+    """True if the box centre (normalised) falls inside any ignore polygon."""
+    if not zones:
+        return False
+    h, w = frame_shape[:2]
+    if w <= 0 or h <= 0:
+        return False
+    cx = (float(box[0]) + float(box[2])) / 2.0 / w
+    cy = (float(box[1]) + float(box[3])) / 2.0 / h
+    return any(_point_in_poly(cx, cy, poly) for poly in zones)
+
+
+def _reject_reason(frame, box, camera, max_sat_frac: float) -> str | None:
+    """Why a FINAL detection box should be dropped (IR artifact / ignore-zone), else None.
+
+    Runs after the species gate + MegaDetector, so it catches both event sources and
+    MD rescues alike. Order: out-of-focus insect blob, saturated IR bloom, then a
+    per-camera ignore-zone (a chronic static-object corner)."""
+    if _is_defocused_blob(frame, box):
+        return "out-of-focus blob (insect at IR lens)"
+    if max_sat_frac < 1.0 and _saturated_fraction(frame, box) >= max_sat_frac:
+        return "saturated IR bloom"
+    zones = getattr(camera, "ignore_zones", None) if camera is not None else None
+    if zones and _box_center_in_zones(box, frame.shape, zones):
+        return "ignore-zone"
+    return None
 
 
 def _now() -> datetime:
@@ -676,22 +740,33 @@ class _Worker:
                 frames, best_det, best_frame, positives, save_best_only, camera_id
             )
 
-        # 4c) Drop out-of-focus bright blobs (insects at the IR illuminator) that
-        # fool BOTH the species model and MegaDetector at night. Runs on the final
-        # boxes so it catches species detections AND MD rescues alike.
+        # 4c) Drop IR artifacts and ignore-zone hits from the FINAL boxes so it
+        # catches species detections AND MegaDetector rescues, for both event
+        # sources: out-of-focus insect blobs, saturated IR blooms (a blown-out blob
+        # next to sharp foliage that the defocus check alone misses), and detections
+        # centred in a per-camera ignore-zone (a chronic static-object corner).
+        max_sat = det_cfg.max_saturated_frac
         if save_best_only:
-            if best_det is not None and _is_defocused_blob(best_frame, best_det.box_xyxy):
-                logger.info(
-                    "Camera %s: dropped %s (conf=%.2f) — out-of-focus blob (insect at IR lens).",
-                    camera_id, best_det.label, best_det.confidence,
-                )
-                best_det, best_frame = None, None
+            if best_det is not None:
+                reason = _reject_reason(best_frame, best_det.box_xyxy, camera, max_sat)
+                if reason:
+                    logger.info(
+                        "Camera %s: dropped %s (conf=%.2f) — %s.",
+                        camera_id, best_det.label, best_det.confidence, reason,
+                    )
+                    best_det, best_frame = None, None
         elif positives:
-            kept_pos = [(f, d) for f, d in positives if not _is_defocused_blob(f, d.box_xyxy)]
+            kept_pos, dropped = [], {}
+            for f, d in positives:
+                reason = _reject_reason(f, d.box_xyxy, camera, max_sat)
+                if reason:
+                    dropped[reason] = dropped.get(reason, 0) + 1
+                else:
+                    kept_pos.append((f, d))
             if len(kept_pos) != len(positives):
                 logger.info(
-                    "Camera %s: dropped %d out-of-focus blob detection(s) (insect at IR lens).",
-                    camera_id, len(positives) - len(kept_pos),
+                    "Camera %s: dropped %d detection(s): %s.",
+                    camera_id, len(positives) - len(kept_pos), dropped,
                 )
             positives = kept_pos
 

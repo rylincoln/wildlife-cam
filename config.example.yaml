@@ -8,6 +8,8 @@ cameras:
     onvif_port: 8000
     # motion_mask: # optional ignore-motion polygons (normalized 0..1) — roads/canopy/water
     #   - [[0.0, 0.7], [1.0, 0.7], [1.0, 1.0], [0.0, 1.0]] # ignore the bottom 30% (e.g. a road)
+    # ignore_zones: # optional POST-DETECTION ignore polygons — drop boxes centred here (works for camera-motion too, unlike motion_mask). For a static object that reads as an animal at night.
+    #   - [[0.0, 0.55], [0.16, 0.55], [0.16, 1.0], [0.0, 1.0]] # e.g. a bucket/post in the bottom-left corner
   - id: south_trail
     host: 192.168.1.102
     username: admin
@@ -42,6 +44,7 @@ detection:
   confidence_threshold: 0.55 # tune: raise for fewer false positives
   min_box_area_frac: 0.01 # ignore specks < 1% of frame area
   save_best_only: true # one best frame per event (vs all positives)
+  max_saturated_frac: 0.20 # drop boxes >=20% blown-out white (IR blooms from an insect/dew at the illuminator). 1.0 disables
 
 dedupe:
   cooldown_s: 30 # suppress re-triggers from same camera within window

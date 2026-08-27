@@ -57,21 +57,27 @@ class CameraConfig(BaseModel):
     onvif_port: int = Field(default=8000, ge=1, le=65535)
 
     motion_mask: list[list[tuple[float, float]]] | None = None
+    # Post-DETECTION ignore polygons: a detection whose box centre falls inside one
+    # is dropped. Unlike motion_mask (software-motion only), this runs on the final
+    # boxes, so it also gates reolink_native (camera-motion) events. For chronic
+    # static-object false positives (a bucket/post that reads as an animal at night).
+    ignore_zones: list[list[tuple[float, float]]] | None = None
 
-    @field_validator("motion_mask")
+    @field_validator("motion_mask", "ignore_zones")
     @classmethod
-    def _validate_motion_mask(
-        cls, value: list[list[tuple[float, float]]] | None
+    def _validate_norm_polys(
+        cls, value: list[list[tuple[float, float]]] | None, info: object
     ) -> list[list[tuple[float, float]]] | None:
-        """Each ignore polygon needs at least 3 points, all with x,y in [0, 1]."""
+        """Each polygon needs at least 3 points, all with x,y normalised to [0, 1]."""
         if value is None:
             return None
+        field = getattr(info, "field_name", "polygon")
         for poly in value:
             if len(poly) < 3:
-                raise ValueError("each motion_mask polygon needs at least 3 points")
+                raise ValueError(f"each {field} polygon needs at least 3 points")
             for x, y in poly:
                 if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
-                    raise ValueError("motion_mask points must be normalised to [0, 1]")
+                    raise ValueError(f"{field} points must be normalised to [0, 1]")
         return value
 
     @model_validator(mode="after")
@@ -124,6 +130,10 @@ class DetectionConfig(BaseModel):
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     min_box_area_frac: float = Field(ge=0.0, le=1.0)
     save_best_only: bool
+    # Drop a detection whose box is at least this fraction near-saturated (blown-out
+    # white) — an IR bloom (insect/dew at the illuminator) the defocus guard misses.
+    # 1.0 disables. Measured: blooms ~0.31, real night frames <0.05.
+    max_saturated_frac: float = Field(default=0.20, ge=0.0, le=1.0)
 
 
 class DedupeConfig(BaseModel):

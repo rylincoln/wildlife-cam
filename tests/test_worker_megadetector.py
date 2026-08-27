@@ -15,7 +15,14 @@ import numpy as np  # noqa: E402
 
 from wildlife.config import Config  # noqa: E402
 from wildlife.models import Detection  # noqa: E402
-from wildlife.worker import _Worker, _is_blank_frame, _is_defocused_blob  # noqa: E402
+from wildlife.worker import (  # noqa: E402
+    _Worker,
+    _box_center_in_zones,
+    _is_blank_frame,
+    _is_defocused_blob,
+    _reject_reason,
+    _saturated_fraction,
+)
 
 
 def test_is_defocused_blob_flags_bright_smooth_blobs():
@@ -40,6 +47,47 @@ def test_is_defocused_blob_flags_bright_smooth_blobs():
     # 3) dark region (not a bright blob) -> not judged, kept
     dark = np.full((H, W, 3), 30, np.uint8)
     assert _is_defocused_blob(dark, box) is False
+
+
+def test_saturated_fraction_measures_blowout():
+    box = (40, 40, 160, 160)
+    white = np.full((200, 200, 3), 255, np.uint8)      # fully blown out
+    assert _saturated_fraction(white, box) > 0.95
+    grey = np.full((200, 200, 3), 120, np.uint8)       # mid-grey scene
+    assert _saturated_fraction(grey, box) == 0.0
+    assert _saturated_fraction(white, (0, 0, 2, 2)) == 0.0  # tiny box guarded
+
+
+def test_box_center_in_zones():
+    shape = (2160, 3840, 3)
+    zone = [[0.0, 0.55], [0.16, 0.55], [0.16, 1.0], [0.0, 1.0]]  # bottom-left corner
+    # a bucket box centred ~(0.06, 0.87) -> inside the zone
+    assert _box_center_in_zones((0, 1602, 489, 2154), shape, [zone]) is True
+    # a mid-frame box -> outside
+    assert _box_center_in_zones((1800, 900, 2100, 1200), shape, [zone]) is False
+    assert _box_center_in_zones((0, 1602, 489, 2154), shape, None) is False  # no zones
+
+
+def test_reject_reason_saturation_zone_and_disable():
+    from types import SimpleNamespace
+
+    box = (40, 40, 160, 160)
+    # Textured but saturated: a 255/210 checkerboard is ~50% blown out yet high-freq,
+    # so the defocus check says "in focus" and only saturation catches it (the real
+    # bloom-next-to-sharp-foliage case).
+    sat = np.full((200, 200, 3), 210, np.uint8)
+    sat[::2, ::2] = 255
+    sat[1::2, 1::2] = 255
+    assert _is_defocused_blob(sat, box) is False              # not caught by defocus
+    assert _reject_reason(sat, box, None, 0.20) == "saturated IR bloom"
+    assert _reject_reason(sat, box, None, 1.0) is None        # 1.0 disables saturation gate
+
+    grey = np.full((200, 200, 3), 120, np.uint8)
+    cam = SimpleNamespace(ignore_zones=[[[0.0, 0.0], [0.3, 0.0], [0.3, 0.3], [0.0, 0.3]]])
+    # a clean box centred in the top-left ignore-zone
+    assert _reject_reason(grey, (0, 0, 40, 40), cam, 0.20) == "ignore-zone"
+    # a clean box, no zone -> kept
+    assert _reject_reason(grey, (80, 80, 120, 120), None, 0.20) is None
 
 
 def test_is_blank_frame_flags_flat_frames():
