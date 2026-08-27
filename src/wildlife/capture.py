@@ -46,6 +46,86 @@ _READ_RETRY_SLEEP_S = 0.05
 _FFMPEG_CAPTURE_OPTIONS_ENV = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
 _DEFAULT_FFMPEG_CAPTURE_OPTIONS = "rtsp_transport;tcp"
 
+# --- Decoder sync -----------------------------------------------------------
+# A fresh RTSP connection lands mid-GOP: FFmpeg starts handing us inter-frames
+# whose reference frames it never saw ("Could not find ref with POC N"), so it
+# emits a neutral-grey 128 plate carrying only the motion-vector residue -- and
+# on a chroma failure, a green or magenta plate. On this rig's 4K HEVC Reolink
+# main stream the first keyframe can be over a second out, which swallowed a
+# whole 5-frame/200ms burst: measured 19 of 20 frames grey before this fix.
+#
+# So after opening we read and DISCARD frames until the decoder produces a real
+# one, then start the burst. Measured sync cost: 0.2-1.5s (4-43 frames).
+_DECODER_SYNC_BUDGET_S = 5.0
+# Fraction of pixels sitting at neutral 128 (+/- this tolerance) above which the
+# frame is a pre-keyframe grey plate. Measured over 445 saved captures: real
+# scenes 0.05-0.14, grey plates 0.61-0.99 -- nothing at all between 0.5 and 0.6.
+_GREY_PLATE_LEVEL = 128
+_GREY_PLATE_TOLERANCE = 4
+_MAX_GREY_PLATE_FRAC = 0.5
+# Ratio of the brightest to the dimmest channel mean above which the frame is a
+# chroma decode failure (the green/magenta plates). Measured: real frames top out
+# at 1.19 (IR night frames are ~1.00), corrupt ones start at 2.02.
+_MAX_CHANNEL_IMBALANCE = 1.5
+# Floor for a totally featureless plate that somehow dodges both tests above.
+_MIN_FRAME_VARIANCE = 10.0
+
+
+def is_corrupt_frame(frame: np.ndarray) -> bool:
+    """True if ``frame`` is a decode artifact rather than a picture of the scene.
+
+    Catches the three shapes a mid-GOP RTSP open produces, in order of how often
+    they showed up in the saved captures:
+
+    1. a neutral-grey 128 plate (no reference frame -- residue only),
+    2. a green/magenta plate (chroma planes decoded without luma, or vice versa),
+    3. a completely flat plate of any colour.
+
+    These matter because the species model happily hallucinates on them: every
+    one of the 215 corrupt frames found in the capture archive had been saved
+    with a confident animal label on it. Any error is treated as "not corrupt"
+    so a guard can never take the pipeline down.
+    """
+    try:
+        if frame is None or frame.size == 0:
+            return True
+        grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        near_neutral = np.abs(grey.astype(np.int16) - _GREY_PLATE_LEVEL) <= _GREY_PLATE_TOLERANCE
+        if float(near_neutral.mean()) > _MAX_GREY_PLATE_FRAC:
+            return True
+        means = [float(frame[:, :, i].mean()) for i in range(frame.shape[2])]
+        if max(means) / max(min(means), 1e-6) > _MAX_CHANNEL_IMBALANCE:
+            return True
+        return float(frame.var()) < _MIN_FRAME_VARIANCE
+    except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
+        return False
+
+
+def _sync_decoder(
+    cap: "cv2.VideoCapture", camera_id: str, deadline: float
+) -> tuple[np.ndarray | None, int]:
+    """Discard pre-keyframe garbage; return the first real frame and the drop count.
+
+    Returns ``(None, n)`` if the sync budget or the overall burst deadline expires
+    without a clean frame -- the caller then treats the burst as a failed capture
+    rather than feeding grey plates to the detector.
+    """
+    budget_end = min(deadline, time.monotonic() + _DECODER_SYNC_BUDGET_S)
+    discarded = 0
+    while time.monotonic() < budget_end:
+        try:
+            ok, frame = cap.read()
+        except cv2.error as exc:  # pragma: no cover - backend dependent
+            logger.debug("Camera %s: read error during decoder sync: %s", camera_id, exc)
+            ok, frame = False, None
+        if not ok or frame is None or frame.size == 0:
+            time.sleep(_READ_RETRY_SLEEP_S)
+            continue
+        if not is_corrupt_frame(frame):
+            return frame.copy(), discarded
+        discarded += 1
+    return None, discarded
+
 
 def _select_url(camera: "CameraConfig", stream: str) -> str:
     """Pick the main or sub RTSP URL off the camera config.
@@ -94,9 +174,14 @@ def grab_burst(
 
     Opens a fresh ``cv2.VideoCapture`` against ``rtsp_main`` or ``rtsp_sub``
     (selected by ``stream``) using the FFmpeg backend, with a 1-frame buffer so
-    we get *current* frames rather than a stale queue. It then pulls up to ``n``
-    frames spaced ``interval_ms`` apart, retrying transient read failures within
-    each slot, and **always** releases the capture before returning.
+    we get *current* frames rather than a stale queue. It waits for the decoder
+    to sync (see :func:`_sync_decoder` -- a fresh RTSP connection lands mid-GOP
+    and hands back grey/green plates until the first keyframe), then pulls up to
+    ``n`` frames spaced ``interval_ms`` apart, retrying transient read failures
+    within each slot, and **always** releases the capture before returning.
+
+    Every returned frame has passed :func:`is_corrupt_frame`, so callers get real
+    pictures of the scene or nothing at all.
 
     Args:
         camera: Camera config with interpolated ``rtsp_main``/``rtsp_sub`` URLs.
@@ -110,8 +195,8 @@ def grab_burst(
 
     Returns:
         A list of BGR ``numpy.ndarray`` frames, newest-last. May be shorter than
-        ``n`` (including empty) if the stream won't open, reads fail, or the
-        timeout is hit.
+        ``n`` (including empty) if the stream won't open, the decoder never
+        syncs, reads fail, or the timeout is hit.
     """
     if n <= 0:
         logger.warning("grab_burst called with n=%d; nothing to do.", n)
@@ -151,8 +236,30 @@ def grab_burst(
             interval_ms,
         )
 
-        next_grab = time.monotonic()
-        for i in range(n):
+        # Wait out the mid-GOP garbage before the burst starts, otherwise the
+        # whole burst can be grey plates (see _DECODER_SYNC_BUDGET_S). The frame
+        # that ends the sync is a real one, so it becomes the burst's first slot
+        # rather than being thrown away.
+        first, discarded = _sync_decoder(cap, camera_id, deadline)
+        if first is None:
+            logger.warning(
+                "Camera %s: decoder never synced (%d corrupt frame(s) discarded in "
+                "%.1fs); no usable frames.",
+                camera_id,
+                discarded,
+                _DECODER_SYNC_BUDGET_S,
+            )
+            return frames
+        if discarded:
+            logger.debug(
+                "Camera %s: decoder synced after discarding %d pre-keyframe frame(s).",
+                camera_id,
+                discarded,
+            )
+        frames.append(first)
+
+        next_grab = time.monotonic() + interval_s
+        for i in range(1, n):
             # Pace the burst: wait until this slot's scheduled time, but never
             # past the overall deadline.
             now = time.monotonic()
@@ -168,6 +275,14 @@ def grab_burst(
                 time.sleep(min(next_grab - now, deadline - now))
 
             frame = _read_one(cap, camera_id, slot=i, deadline=deadline)
+            if frame is not None and is_corrupt_frame(frame):
+                logger.debug(
+                    "Camera %s: dropping corrupt frame %d/%d (decode artifact).",
+                    camera_id,
+                    i + 1,
+                    n,
+                )
+                frame = None
             if frame is not None:
                 frames.append(frame)
             else:

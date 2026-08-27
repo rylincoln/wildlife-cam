@@ -37,7 +37,7 @@ from datetime import datetime
 from types import FrameType
 
 from wildlife.audio import AudioAnalyzer
-from wildlife.capture import grab_burst
+from wildlife.capture import grab_burst, is_corrupt_frame
 from wildlife.config import CameraConfig, Config, load_config
 from wildlife.detect import Detector
 from wildlife.events.audio_detection import AudioDetectionSource
@@ -64,19 +64,17 @@ _MAX_BACKOFF_S = 30.0
 _QUEUE_GET_TIMEOUT_S = 0.5
 # Grace period to let each producer thread notice shutdown and exit.
 _PRODUCER_JOIN_TIMEOUT_S = 2.0
-# A frame flatter than this (pixel variance) is a near-uniform grey/black plate
-# from a go2rtc reconnect or decode gap, not a real scene (a real outdoor frame
-# is in the thousands). We drop these before inference so a stream hiccup can't
-# be saved -- neither by the species model nor a MegaDetector rescue.
-_MIN_FRAME_VARIANCE = 10.0
-
-
 def _is_blank_frame(frame) -> bool:
-    """True if ``frame`` is near-uniform (blank/corrupt), judged by pixel variance."""
-    try:
-        return float(frame.var()) < _MIN_FRAME_VARIANCE
-    except Exception:  # noqa: BLE001 - a guard must never crash the pipeline
-        return False
+    """True if ``frame`` is a decode artifact (grey/green/magenta plate) not a scene.
+
+    Delegates to :func:`wildlife.capture.is_corrupt_frame`. This used to be a bare
+    ``frame.var() < 10`` test, which was calibrated on perfectly uniform plates and
+    so caught *none* of the real ones: a pre-keyframe grey plate carries motion-vector
+    residue that lifts its variance to 10-147. Of 122 grey plates in the capture
+    archive, that threshold caught 0, and every one was saved with a false animal
+    label. The shared test keys on the residue-immune signals instead.
+    """
+    return is_corrupt_frame(frame)
 
 
 # Insect/moth flying at the IR illuminator = a bright but grossly OUT-OF-FOCUS
