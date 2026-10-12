@@ -3,10 +3,11 @@
 go2rtc is the external companion service that performs the actual WebRTC/MSE
 livestreaming; the gallery merely embeds its player. This module is the *single
 source of truth* for go2rtc stream naming: for every camera in the wildlife
-config it emits exactly two streams,
+config it emits two streams,
 
 * ``"<camera.id>_main"`` -> ``[camera.rtsp_main]``
 * ``"<camera.id>_sub"``  -> ``[camera.rtsp_sub]``
+* when livestream.mjpeg is set, also <id>_mjpeg / <id>_mjpeg_hd (ffmpeg-derived)
 
 plus the API / WebRTC / RTSP listen addresses and a log block taken from
 :class:`wildlife.config.LivestreamConfig`.
@@ -32,6 +33,27 @@ __all__ = [
     "write_go2rtc_config",
     "main",
 ]
+
+
+def _mjpeg_streams(config: Config) -> dict[str, list[str]]:
+    """Derived MJPEG streams per camera, read from go2rtc's own ``_sub``/``_main`` streams.
+
+    Referencing the go2rtc stream name (not the camera RTSP URL) keeps each camera at
+    a single RTSP session and keeps credentials out of these entries. Syntax verified
+    against go2rtc 1.9.14.
+    """
+    mj = config.livestream.mjpeg
+    assert mj is not None
+    out: dict[str, list[str]] = {}
+    for camera in config.cameras:
+        out[f"{camera.id}_mjpeg"] = [
+            f"ffmpeg:{camera.id}_sub#video=mjpeg#raw=-r {mj.fps} -q:v {mj.quality}"
+        ]
+        out[f"{camera.id}_mjpeg_hd"] = [
+            f"ffmpeg:{camera.id}_main#video=mjpeg#width={mj.hd_width}"
+            f"#raw=-r {mj.fps} -q:v {mj.hd_quality}"
+        ]
+    return out
 
 
 def build_go2rtc_config(config: Config) -> dict:
@@ -61,6 +83,8 @@ def build_go2rtc_config(config: Config) -> dict:
     for camera in config.cameras:
         streams[f"{camera.id}_main"] = [camera.rtsp_main]
         streams[f"{camera.id}_sub"] = [camera.rtsp_sub]
+    if ls.mjpeg is not None:
+        streams.update(_mjpeg_streams(config))
 
     api: dict = {"listen": ls.api_listen}
     if ls.base_path:

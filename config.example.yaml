@@ -88,6 +88,13 @@ livestream: # optional on-demand live view via a companion go2rtc binary (detect
   main_mode: "webrtc,mse" # HEVC 4K main -> MSE
   sub_mode: "webrtc" # H264 High sub -> WebRTC
   base_path: "" # set "/go2rtc" to serve go2rtc under a sub-path for Cloudflare-Tunnel remote access
+  # Optional MJPEG restreams for clients that can't decode H.264/H.265 (the /frame kiosk).
+  # Emits <id>_mjpeg (from _sub) and <id>_mjpeg_hd (from _main) in the generated go2rtc.yaml.
+  # mjpeg:
+  #   fps: 4          # frames per second
+  #   quality: 7      # ffmpeg -q:v for <id>_mjpeg (2=best .. 31=worst), ~30 KB at 640x360
+  #   hd_width: 1280  # width of <id>_mjpeg_hd
+  #   hd_quality: 14  # ffmpeg -q:v for <id>_mjpeg_hd, ~70-100 KB at 1280x720
 
 remote: # optional Cloudflare-Tunnel remote access (see README "Remote access")
   enabled: false # set by `wildlife-share-secret`; gates tunnel traffic with a shared-secret link

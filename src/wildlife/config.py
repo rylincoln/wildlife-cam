@@ -35,6 +35,7 @@ __all__ = [
     "GalleryConfig",
     "ResourceGuardConfig",
     "LivestreamConfig",
+    "MjpegConfig",
     "AdminConfig",
     "RemoteConfig",
     "ContinuousConfig",
@@ -190,6 +191,20 @@ class ResourceGuardConfig(BaseModel):
     max_burst_per_minute: int = Field(default=20, ge=1)
 
 
+class MjpegConfig(BaseModel):
+    """Derived MJPEG restreams for clients that cannot decode H.264/H.265.
+
+    go2rtc transcodes each camera's existing ``_sub`` / ``_main`` stream to MJPEG
+    with ffmpeg, only while a client is watching. Used by the ``/frame`` kiosk page
+    (an Android 6 picture frame whose WebView cannot play the cameras' codecs).
+    """
+
+    fps: int = Field(default=4, ge=1, le=15)  # output frame rate for both derived streams
+    quality: int = Field(default=7, ge=2, le=31)  # ffmpeg -q:v for <id>_mjpeg (2=best, 31=worst)
+    hd_width: int = Field(default=1280, ge=320, le=3840)  # width of <id>_mjpeg_hd (from main)
+    hd_quality: int = Field(default=14, ge=2, le=31)  # ffmpeg -q:v for <id>_mjpeg_hd
+
+
 class LivestreamConfig(BaseModel):
     """Optional on-demand live view served by a companion go2rtc binary.
 
@@ -216,6 +231,7 @@ class LivestreamConfig(BaseModel):
     main_mode: str = "webrtc,mse"  # HEVC 4K -> MSE
     sub_mode: str = "webrtc"  # H264 High -> WebRTC (omit "mse" so it isn't chosen)
     base_path: str = ""  # serve go2rtc under a sub-path (e.g. "/go2rtc") for tunnel exposure
+    mjpeg: MjpegConfig | None = None  # set to emit <id>_mjpeg / <id>_mjpeg_hd go2rtc streams
 
     @field_validator("base_path")
     @classmethod
