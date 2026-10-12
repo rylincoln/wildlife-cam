@@ -418,6 +418,25 @@ can't cross a tunnel), gated at Cloudflare's edge by one WAF rule checking the s
 
 ---
 
+## Frame kiosk (`/frame`)
+
+A LAN-only 1280×800 dashboard for a picture-frame display: two MJPEG camera tiles
+(tap for full screen) above a Home Assistant strip (time, weather, temperatures,
+energy), with a night mode that dims the backlight, turns the text red and fades
+the camera images further.
+
+1. Enable MJPEG restreams (`livestream.mjpeg`, see `config.example.yaml`) and
+   regenerate go2rtc: `wildlife-stream-config config.yaml go2rtc.yaml`, then
+   `sudo launchctl kickstart -k system/com.wildlife.stream`.
+2. Create a non-admin Home Assistant user, log in as it, and create a long-lived
+   access token (Profile → Security). Put it in `homeassistant.token` with an
+   `entities:` allow-list. The token stays on this server; the frame only gets
+   the allow-listed, formatted values from `/frame/state`.
+3. Set `frame.enabled: true`. The gallery picks up config changes live.
+
+`/frame`, `/frame/state` and `/frame/info` are refused over the Cloudflare tunnel.
+`/frame/info` shows the last client that polled, to find the frame's (changing) IP.
+
 ## Continuous (motion-gated) detection
 
 By default the pipeline only looks when Reolink's onboard AI fires. Continuous
