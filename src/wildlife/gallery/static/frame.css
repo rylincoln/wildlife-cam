@@ -51,6 +51,7 @@ figcaption {
 #ampm { margin-left: 10px; font-size: 40px; color: var(--muted); }
 #date { margin-top: 12px; font-size: 30px; color: var(--muted); }
 .mid { width: 360px; }
+.rain { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; font-size: 22px; }
 .weather .temp { font-size: 96px; font-weight: 300; line-height: 1; }
 .weather .cond { margin-top: 8px; font-size: 32px; }
 .weather .hilo { margin-top: 8px; font-size: 26px; color: var(--muted); }
@@ -64,7 +65,7 @@ figcaption {
 #full figcaption { font-size: 28px; }
 
 /* Wildlife: latest camera sighting under the clock, latest bird under the weather. */
-.sighting, .bird { display: flex; align-items: center; gap: 14px; margin-top: 22px; }
+.sighting, .bird { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
 .sighting img { width: 160px; height: 90px; object-fit: cover; border-radius: 6px; background: #111; }
 .bird img { width: 72px; height: 72px; object-fit: cover; border-radius: 36px; background: #111; }
 .cap { font-size: 22px; color: var(--muted); }

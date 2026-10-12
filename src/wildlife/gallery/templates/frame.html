@@ -30,6 +30,7 @@
     </div>
     <div class="mid">
       <div class="weather" id="weather"></div>
+      <div id="rain" class="rain"></div>
       <div id="bird" class="bird" hidden><img alt=""><div class="cap"></div></div>
     </div>
     <div id="values"></div>
@@ -160,8 +161,11 @@
   function render(ha) {
     var weather = document.getElementById("weather");
     var values = document.getElementById("values");
+    var rain = document.getElementById("rain");
     clear(weather);
     clear(values);
+    clear(rain);
+    rain.className = ha.stale ? "rain stale" : "rain";
     // Only the HA values fade when stale; the clock keeps full brightness.
     weather.className = ha.stale ? "weather stale" : "weather";
     values.className = ha.stale ? "stale" : "";
@@ -177,7 +181,7 @@
       var row = el("div", "row");
       row.appendChild(el("span", "label", item.label));
       row.appendChild(el("span", "value", item.display));
-      values.appendChild(row);
+      (item.slot === "rain" ? rain : values).appendChild(row);
     });
     if (ha.stale && ha.age_seconds !== null) {
       values.appendChild(el("div", "age", "updated " + Math.round(ha.age_seconds / 60) + " min ago"));

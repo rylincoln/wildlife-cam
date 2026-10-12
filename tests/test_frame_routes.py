@@ -297,3 +297,8 @@ def test_page_renders_initial_dim_state_so_a_reload_does_not_flash(tmp_path: Pat
     at(12, 0)
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
     assert 'data-dim-active="false"' in body and 'class="night"' not in body
+
+
+def test_page_has_rain_rows_container(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'id="rain"' in body and 'item.slot === "rain"' in body

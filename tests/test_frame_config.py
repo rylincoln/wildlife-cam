@@ -78,3 +78,7 @@ def test_entity_validation() -> None:
         HAEntityConfig(id="Sensor.Outdoor", slot="temps")
     with pytest.raises(ValidationError):
         HAEntityConfig(id="sensor.x/../../api", slot="temps")
+
+
+def test_rain_slot_is_allowed() -> None:
+    assert HAEntityConfig(id="sensor.station_daily_rain", slot="rain", label="Rain today").slot == "rain"

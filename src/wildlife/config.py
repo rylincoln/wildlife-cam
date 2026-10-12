@@ -488,7 +488,7 @@ class HAEntityConfig(BaseModel):
     """One allow-listed Home Assistant entity shown in the frame's strip."""
 
     id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
-    slot: Literal["weather", "temps", "energy"]
+    slot: Literal["weather", "temps", "energy", "rain"]
     label: str = ""  # empty -> HA friendly_name
 
 

@@ -97,6 +97,8 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
         return str(state)
     if math.isnan(number) or math.isinf(number):
         return _DASH
+    if unit in ("in", "in/h"):  # rain gauges: hundredths of an inch matter
+        return f'{number:.2f}"' + ("/h" if unit == "in/h" else "")
     if unit == "W" and abs(number) >= 1000:
         number, unit = number / 1000, "kW"
     text = _num(number)
