@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Frame</title></head>
+<body>
+<main id="frame" data-refresh="{{ refresh_seconds }}">
+{% if mjpeg_enabled %}
+{% for cam in cameras %}
+  <figure class="tile" data-id="{{ cam.id }}" data-src="{{ cam.mjpeg }}" data-hd="{{ cam.mjpeg_hd }}">
+    <img alt="{{ cam.label }}">
+    <figcaption>{{ cam.label }}</figcaption>
+  </figure>
+{% endfor %}
+{% else %}
+  <p class="notice">Set livestream.mjpeg in config.yaml to show cameras.</p>
+{% endif %}
+</main>
+</body>
+</html>

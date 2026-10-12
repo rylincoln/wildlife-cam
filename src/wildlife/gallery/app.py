@@ -282,6 +282,8 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         path = request.path
         if remote.block_admin and (path == "/admin" or path.startswith("/admin/")):
             abort(404)  # /admin is never reachable over the tunnel
+        if path == "/frame" or path.startswith("/frame/"):
+            abort(404)  # frame dashboard + Home Assistant proxy are LAN-only
         if path.startswith("/static/"):
             return None  # styling assets carry no data; keep the shared page rendered
         if not remote.share_secret_hash:
@@ -415,6 +417,13 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             "live.html", cameras=cameras, default_stream=ls.default_stream,
             allow_main=ls.allow_main, single=True, remote=remote,
         )
+
+    # ----------------------------------------------------------------------- #
+    # Frame kiosk (LAN-only; see wildlife.frame.routes)
+    # ----------------------------------------------------------------------- #
+    from wildlife.frame.routes import create_frame_blueprint
+
+    app.register_blueprint(create_frame_blueprint(get_config, lambda: _live_base(False)))
 
     # ----------------------------------------------------------------------- #
     # Serialization + query helpers

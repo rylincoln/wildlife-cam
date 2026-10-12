@@ -1,0 +1,105 @@
+"""LAN-only /frame kiosk routes: the page, its state JSON, and a last-seen probe.
+
+* ``GET /frame``       -- the 1280x800 dashboard (two MJPEG tiles + HA strip).
+* ``GET /frame/state`` -- server time, night-dim state and the allow-listed HA
+  snapshot; also records the polling client so ``/frame/info`` can report it.
+* ``GET /frame/info``  -- plain-text last poller (IP, time, user agent) to find the
+  frame on the LAN (its Wi-Fi MAC/IP change on every boot).
+
+The tunnel gate in :mod:`wildlife.gallery.app` 404s all of these remotely.
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable
+from datetime import datetime
+
+from flask import Blueprint, Response, abort, jsonify, render_template, request
+
+from wildlife.config import Config
+from wildlife.frame.ha import HACache
+from wildlife.frame.schedule import in_window
+
+__all__ = ["create_frame_blueprint"]
+
+
+def _now() -> datetime:
+    """Local wall-clock time on the gallery host (module-level so tests can pin it)."""
+    return datetime.now()
+
+
+def create_frame_blueprint(
+    get_config: Callable[[], Config], go2rtc_base: Callable[[], str]
+) -> Blueprint:
+    """Build the frame blueprint.
+
+    Args:
+        get_config: Returns the current (live-reloaded) config.
+        go2rtc_base: Returns the browser-reachable go2rtc base URL for LAN clients,
+            e.g. ``http://192.168.1.193:1984/go2rtc``.
+    """
+    bp = Blueprint("frame", __name__)
+    cache = HACache()
+    seen: dict = {"ip": None, "ua": "", "at": None}
+    seen_lock = threading.Lock()
+
+    def _enabled_config() -> Config:
+        cfg = get_config()
+        if not cfg.frame.enabled:
+            abort(404)
+        return cfg
+
+    def _camera_ids(cfg: Config) -> list[str]:
+        known = [c.id for c in cfg.cameras]
+        chosen = [cid for cid in cfg.frame.cameras if cid in known]
+        return chosen or known
+
+    @bp.route("/frame")
+    def frame_page():
+        cfg = _enabled_config()
+        base = go2rtc_base()
+        cameras = [
+            {
+                "id": cid,
+                "label": cid.replace("_", " "),
+                "mjpeg": f"{base}/api/stream.mjpeg?src={cid}_mjpeg",
+                "mjpeg_hd": f"{base}/api/stream.mjpeg?src={cid}_mjpeg_hd",
+            }
+            for cid in _camera_ids(cfg)
+        ]
+        return render_template(
+            "frame.html",
+            cameras=cameras,
+            mjpeg_enabled=cfg.livestream.mjpeg is not None,
+            refresh_seconds=cfg.frame.refresh_seconds,
+        )
+
+    @bp.route("/frame/state")
+    def frame_state():
+        cfg = _enabled_config()
+        now = _now()
+        with seen_lock:
+            seen.update(ip=request.remote_addr, ua=(request.user_agent.string or "")[:200], at=now)
+        dim = cfg.frame.dim
+        dim_out = {
+            "active": dim is not None and in_window(now.time(), dim.start, dim.end),
+            "level": dim.level if dim is not None else 1.0,
+            "wake_seconds": dim.wake_seconds if dim is not None else 0,
+        }
+        snapshot = cache.snapshot(cfg.homeassistant, cfg.frame.refresh_seconds)
+        resp = jsonify({"now": now.timestamp(), "dim": dim_out, "ha": snapshot})
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @bp.route("/frame/info")
+    def frame_info():
+        _enabled_config()
+        with seen_lock:
+            ip, ua, at = seen["ip"], seen["ua"], seen["at"]
+        if ip is None:
+            return Response("no polls yet\n", mimetype="text/plain")
+        text = f"last poll: {ip} at {at.isoformat(timespec='seconds')}\nuser agent: {ua}\n"
+        return Response(text, mimetype="text/plain")
+
+    return bp
