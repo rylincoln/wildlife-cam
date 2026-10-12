@@ -1,0 +1,210 @@
+"""Read-only Home Assistant access for the /frame dashboard.
+
+The long-lived token never leaves this server: :class:`HACache` fetches only the
+allow-listed entities from ``config.homeassistant`` and returns a filtered,
+display-ready snapshot. One snapshot is shared by every viewer for
+``refresh_seconds``; when HA is unreachable the last good values are served,
+flagged ``stale``. A 404 for a single entity (typo, deleted entity) yields a "—"
+row instead of failing the strip.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import threading
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from typing import Any
+
+from wildlife.config import HAEntityConfig, HomeAssistantConfig
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["KEPT_ATTRS", "HACache", "display_value", "urllib_fetch"]
+
+KEPT_ATTRS = (
+    "temperature",
+    "temperature_unit",
+    "current_temperature",
+    "hvac_action",
+    "condition",
+    "humidity",
+)
+FORECAST_TTL_S = 1800.0
+FORECAST_RETRY_S = 60.0
+_MISSING = ("", "unavailable", "unknown")
+_DASH = "—"
+CONDITIONS = {
+    "clear-night": "Clear",
+    "cloudy": "Cloudy",
+    "exceptional": "Alert",
+    "fog": "Fog",
+    "hail": "Hail",
+    "lightning": "Thunderstorm",
+    "lightning-rainy": "Thunderstorm",
+    "partlycloudy": "Partly cloudy",
+    "pouring": "Heavy rain",
+    "rainy": "Rain",
+    "snowy": "Snow",
+    "snowy-rainy": "Sleet",
+    "sunny": "Sunny",
+    "windy": "Windy",
+    "windy-variant": "Windy",
+}
+
+Fetch = Callable[[str, str, dict, "bytes | None", float], Any]
+
+
+def urllib_fetch(method: str, url: str, headers: dict, body: bytes | None, timeout: float) -> Any:
+    """Perform one HTTP request against Home Assistant and decode its JSON reply."""
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _num(value: Any) -> str:
+    """Format a number with at most one decimal, dropping a trailing ``.0``."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(number) or math.isinf(number):
+        return _DASH
+    number = round(number, 1)
+    return str(int(number)) if number == int(number) else f"{number:.1f}"
+
+
+def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -> str:
+    """Human-readable value for one strip row (never raises, never 'nan')."""
+    if state is None or state in _MISSING:
+        return _DASH
+    if "current_temperature" in attrs:  # climate entity: show the measured temperature
+        text = _num(attrs["current_temperature"]) + "°"
+        action = attrs.get("hvac_action")
+        return f"{text} · {action}" if action else text
+    if slot == "weather":
+        temp = attrs.get("temperature")
+        return _num(temp) + "°" if temp is not None else _DASH
+    try:
+        number = float(state)
+    except (TypeError, ValueError):
+        return str(state)
+    if math.isnan(number) or math.isinf(number):
+        return _DASH
+    if unit == "W" and abs(number) >= 1000:
+        number, unit = number / 1000, "kW"
+    text = _num(number)
+    if unit in ("°F", "°C"):
+        return text + "°"
+    return f"{text} {unit}" if unit else text
+
+
+def _shape(entity: HAEntityConfig, payload: dict | None) -> dict:
+    payload = payload or {}
+    attrs = payload.get("attributes") or {}
+    state = payload.get("state")
+    unit = attrs.get("unit_of_measurement")
+    kept = {k: attrs[k] for k in KEPT_ATTRS if k in attrs}
+    return {
+        "slot": entity.slot,
+        "label": entity.label or attrs.get("friendly_name") or entity.id,
+        "state": state,
+        "unit": unit,
+        "attrs": kept,
+        "display": display_value(entity.slot, state, unit, kept),
+        "detail": CONDITIONS.get(state, str(state or "")) if entity.slot == "weather" else "",
+    }
+
+
+class HACache:
+    """Shared, thread-safe, allow-listed snapshot of Home Assistant state."""
+
+    def __init__(self, fetch: Fetch | None = None, clock: Callable[[], float] = time.monotonic):
+        self._fetch = fetch
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._reset(None)
+
+    def _reset(self, key: object) -> None:
+        self._key = key
+        self._items: list[dict] = []
+        self._ok = False
+        self._good_at: float | None = None
+        self._attempt_at: float | None = None
+        self._forecast: dict | None = None
+        self._forecast_due = float("-inf")
+
+    def snapshot(self, ha: HomeAssistantConfig, refresh_seconds: float) -> dict:
+        """Return the current snapshot, refreshing from HA when it is older than allowed."""
+        key = (ha.url, ha.token, ha.timeout_seconds, tuple((e.id, e.slot, e.label) for e in ha.entities))
+        with self._lock:
+            if key != self._key:
+                self._reset(key)  # allow-list/token/url changed: drop everything cached
+            if not (ha.url and ha.token and ha.entities):
+                return {"ok": False, "stale": True, "age_seconds": None, "items": [], "forecast": None}
+            now = self._clock()
+            if self._attempt_at is None or now - self._attempt_at >= refresh_seconds:
+                self._attempt_at = now
+                self._refresh_states(ha, now)
+            if now >= self._forecast_due:
+                self._refresh_forecast(ha, now)
+            age = None if self._good_at is None else round(now - self._good_at)
+            return {
+                "ok": self._ok,
+                "stale": not self._ok,
+                "age_seconds": age,
+                "items": list(self._items),
+                "forecast": self._forecast,
+            }
+
+    def _call(self, ha: HomeAssistantConfig, method: str, path: str, payload: dict | None = None):
+        fetch = self._fetch or urllib_fetch  # module global resolved per call (monkeypatchable)
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Authorization": f"Bearer {ha.token}", "Content-Type": "application/json"}
+        return fetch(method, ha.url + path, headers, body, ha.timeout_seconds)
+
+    def _refresh_states(self, ha: HomeAssistantConfig, now: float) -> None:
+        items: list[dict] = []
+        try:
+            for entity in ha.entities:
+                try:
+                    payload = self._call(ha, "GET", f"/api/states/{entity.id}")
+                except urllib.error.HTTPError as err:
+                    if err.code != 404:
+                        raise
+                    payload = None  # unknown entity: render a dash, keep the rest of the strip
+                items.append(_shape(entity, payload if isinstance(payload, dict) else None))
+        except (OSError, ValueError) as err:  # URLError/HTTPError/timeout are OSErrors
+            logger.warning("Home Assistant unavailable (%s); serving last good values", err)
+            self._ok = False
+            return
+        self._items, self._ok, self._good_at = items, True, now
+
+    def _refresh_forecast(self, ha: HomeAssistantConfig, now: float) -> None:
+        weather = next((e for e in ha.entities if e.slot == "weather"), None)
+        if weather is None:
+            self._forecast, self._forecast_due = None, float("inf")
+            return
+        try:
+            resp = self._call(
+                ha,
+                "POST",
+                "/api/services/weather/get_forecasts?return_response",
+                {"entity_id": weather.id, "type": "daily"},
+            )
+            service = resp.get("service_response") if isinstance(resp, dict) else None
+            entry = service.get(weather.id) if isinstance(service, dict) else None
+            days = entry.get("forecast") if isinstance(entry, dict) else None
+        except (OSError, ValueError) as err:
+            logger.info("Weather forecast unavailable (%s); retrying in %ss", err, FORECAST_RETRY_S)
+            self._forecast_due = now + FORECAST_RETRY_S
+            return
+        today = days[0] if isinstance(days, list) and days and isinstance(days[0], dict) else None
+        self._forecast = (
+            {"high": today.get("temperature"), "low": today.get("templow")} if today else None
+        )
+        self._forecast_due = now + FORECAST_TTL_S
