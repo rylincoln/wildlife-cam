@@ -11,6 +11,7 @@ The tunnel gate in :mod:`wildlife.gallery.app` 404s all of these remotely.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -22,6 +23,21 @@ from wildlife.frame.ha import HACache
 from wildlife.frame.schedule import in_window
 
 __all__ = ["create_frame_blueprint"]
+
+
+logger = logging.getLogger(__name__)
+
+_NO_HA = {"ok": False, "stale": True, "age_seconds": None, "items": [], "forecast": None}
+
+
+def _dim_state(cfg: Config, now: datetime) -> dict:
+    """Night-dim state for ``now``; full brightness when ``frame.dim`` is null."""
+    dim = cfg.frame.dim
+    return {
+        "active": dim is not None and in_window(now.time(), dim.start, dim.end),
+        "level": dim.level if dim is not None else 1.0,
+        "wake_seconds": dim.wake_seconds if dim is not None else 0,
+    }
 
 
 def _now() -> datetime:
@@ -73,6 +89,7 @@ def create_frame_blueprint(
             cameras=cameras,
             mjpeg_enabled=cfg.livestream.mjpeg is not None,
             refresh_seconds=cfg.frame.refresh_seconds,
+            dim=_dim_state(cfg, _now()),  # initial state: a reload at night must not flash bright
         )
 
     @bp.route("/frame/state")
@@ -81,14 +98,12 @@ def create_frame_blueprint(
         now = _now()
         with seen_lock:
             seen.update(ip=request.remote_addr, ua=(request.user_agent.string or "")[:200], at=now)
-        dim = cfg.frame.dim
-        dim_out = {
-            "active": dim is not None and in_window(now.time(), dim.start, dim.end),
-            "level": dim.level if dim is not None else 1.0,
-            "wake_seconds": dim.wake_seconds if dim is not None else 0,
-        }
-        snapshot = cache.snapshot(cfg.homeassistant, cfg.frame.refresh_seconds)
-        resp = jsonify({"now": now.timestamp(), "dim": dim_out, "ha": snapshot})
+        try:
+            snapshot = cache.snapshot(cfg.homeassistant, cfg.frame.refresh_seconds)
+        except Exception:  # HA must never take the clock and dimming down
+            logger.exception("Home Assistant snapshot failed")
+            snapshot = dict(_NO_HA)
+        resp = jsonify({"now": now.timestamp(), "dim": _dim_state(cfg, now), "ha": snapshot})
         resp.headers["Cache-Control"] = "no-store"
         return resp
 

@@ -50,8 +50,10 @@ def _mjpeg_streams(config: Config) -> dict[str, list[str]]:
             f"ffmpeg:{camera.id}_sub#video=mjpeg#raw=-r {mj.fps} -q:v {mj.quality}"
         ]
         out[f"{camera.id}_mjpeg_hd"] = [
-            f"ffmpeg:{camera.id}_main#video=mjpeg#width={mj.hd_width}"
-            f"#raw=-r {mj.fps} -q:v {mj.hd_quality}"
+            (
+                f"ffmpeg:{camera.id}_main#video=mjpeg#width={mj.hd_width}"
+                f"#raw=-r {mj.fps} -q:v {mj.hd_quality}"
+            )
         ]
     return out
 

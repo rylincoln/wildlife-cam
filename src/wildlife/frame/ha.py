@@ -67,11 +67,11 @@ def urllib_fetch(method: str, url: str, headers: dict, body: bytes | None, timeo
 
 
 def _num(value: Any) -> str:
-    """Format a number with at most one decimal, dropping a trailing ``.0``."""
+    """Format a number with at most one decimal, dropping a trailing ``.0`` ("—" if not a number)."""
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return str(value)
+        return _DASH
     if math.isnan(number) or math.isinf(number):
         return _DASH
     number = round(number, 1)
@@ -83,12 +83,14 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
     if state is None or state in _MISSING:
         return _DASH
     if "current_temperature" in attrs:  # climate entity: show the measured temperature
-        text = _num(attrs["current_temperature"]) + "°"
+        reading = _num(attrs["current_temperature"])
+        if reading == _DASH:  # HA sends null while the thermostat has no reading
+            return _DASH
         action = attrs.get("hvac_action")
-        return f"{text} · {action}" if action else text
+        return f"{reading}° · {action}" if action else f"{reading}°"
     if slot == "weather":
-        temp = attrs.get("temperature")
-        return _num(temp) + "°" if temp is not None else _DASH
+        reading = _num(attrs.get("temperature"))
+        return _DASH if reading == _DASH else reading + "°"
     try:
         number = float(state)
     except (TypeError, ValueError):
@@ -101,6 +103,16 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
     if unit in ("°F", "°C"):
         return text + "°"
     return f"{text} {unit}" if unit else text
+
+
+def _hilo(high: Any, low: Any) -> str | None:
+    """'H 78°  L 51°' from today's forecast, leaving out missing parts (never 'L 0°')."""
+    parts = []
+    for prefix, value in (("H", high), ("L", low)):
+        if _num(value) == _DASH:  # None, non-numeric, nan/inf
+            continue
+        parts.append(f"{prefix} {round(float(value))}°")
+    return "  ".join(parts) or None
 
 
 def _shape(entity: HAEntityConfig, payload: dict | None) -> dict:
@@ -178,7 +190,7 @@ class HACache:
                         raise
                     payload = None  # unknown entity: render a dash, keep the rest of the strip
                 items.append(_shape(entity, payload if isinstance(payload, dict) else None))
-        except (OSError, ValueError) as err:  # URLError/HTTPError/timeout are OSErrors
+        except Exception as err:  # noqa: BLE001 - any HA fault (incl. http.client) -> stale
             logger.warning("Home Assistant unavailable (%s); serving last good values", err)
             self._ok = False
             return
@@ -199,12 +211,14 @@ class HACache:
             service = resp.get("service_response") if isinstance(resp, dict) else None
             entry = service.get(weather.id) if isinstance(service, dict) else None
             days = entry.get("forecast") if isinstance(entry, dict) else None
-        except (OSError, ValueError) as err:
+        except Exception as err:  # noqa: BLE001 - forecast is optional; never fail the strip
             logger.info("Weather forecast unavailable (%s); retrying in %ss", err, FORECAST_RETRY_S)
             self._forecast_due = now + FORECAST_RETRY_S
             return
         today = days[0] if isinstance(days, list) and days and isinstance(days[0], dict) else None
-        self._forecast = (
-            {"high": today.get("temperature"), "low": today.get("templow")} if today else None
-        )
+        if today is None:
+            self._forecast = None
+        else:
+            high, low = today.get("temperature"), today.get("templow")
+            self._forecast = {"high": high, "low": low, "display": _hilo(high, low)}
         self._forecast_due = now + FORECAST_TTL_S

@@ -7,7 +7,9 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='frame.css') }}">
 </head>
 <body>
-<main id="frame" data-refresh="{{ refresh_seconds }}">
+<main id="frame"{% if dim.active %} class="night"{% endif %} data-refresh="{{ refresh_seconds }}"
+      data-dim-active="{{ 'true' if dim.active else 'false' }}" data-dim-level="{{ dim.level }}"
+      data-dim-wake="{{ dim.wake_seconds }}">
   <section class="cams">
   {% if mjpeg_enabled %}
   {% for cam in cameras %}
@@ -42,7 +44,12 @@
   var fullImg = full.querySelector("img");
   var offset = 0;          // server clock minus local clock (ms)
   var failures = 0;
-  var dim = { active: false, level: 1, wake: 60 };
+  // Start from the server-rendered state so a (nightly) reload never flashes to full brightness.
+  var dim = {
+    active: root.getAttribute("data-dim-active") === "true",
+    level: parseFloat(root.getAttribute("data-dim-level")),
+    wake: parseInt(root.getAttribute("data-dim-wake"), 10)
+  };
   var wakeUntil = 0;
   var dimmed = null;
   var fullTimer = null;
@@ -150,9 +157,8 @@
       if (item.slot === "weather" && !weather.firstChild) {
         weather.appendChild(el("div", "temp", item.display));
         weather.appendChild(el("div", "cond", item.detail));
-        if (ha.forecast && ha.forecast.high !== null && ha.forecast.high !== undefined) {
-          weather.appendChild(el("div", "hilo",
-            "H " + Math.round(ha.forecast.high) + "°  L " + Math.round(ha.forecast.low) + "°"));
+        if (ha.forecast && ha.forecast.display) {   // formatted server-side; never "L 0°"
+          weather.appendChild(el("div", "hilo", ha.forecast.display));
         }
         return;
       }

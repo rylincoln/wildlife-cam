@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 
@@ -151,7 +152,9 @@ def test_forecast_high_low_from_first_daily_entry_cached_30_minutes() -> None:
     def posts() -> int:
         return sum(1 for m, _ in fake.calls if m == "POST")
 
-    assert cache.snapshot(_ha(WX), 15)["forecast"] == {"high": 78, "low": 51}
+    assert cache.snapshot(_ha(WX), 15)["forecast"] == {
+        "high": 78, "low": 51, "display": "H 78°  L 51°"
+    }
     assert posts() == 1
     clock.t += 1799
     cache.snapshot(_ha(WX), 15)
@@ -175,7 +178,9 @@ def test_forecast_retried_after_a_minute_when_it_fails() -> None:
     clock.t += 59
     assert cache.snapshot(_ha(WX), 15)["forecast"] is None
     clock.t += 1
-    assert cache.snapshot(_ha(WX), 15)["forecast"] == {"high": 80, "low": 50}
+    assert cache.snapshot(_ha(WX), 15)["forecast"] == {
+        "high": 80, "low": 50, "display": "H 80°  L 50°"
+    }
 
 
 def test_no_forecast_request_without_weather_entity() -> None:
@@ -206,3 +211,37 @@ def test_no_forecast_request_without_weather_entity() -> None:
 )
 def test_display_value(slot, state, unit, attrs, expected) -> None:
     assert display_value(slot, state, unit, attrs) == expected
+
+
+def test_unexpected_http_errors_mark_stale_instead_of_raising() -> None:  # final review #1
+    class Broken(FakeHA):
+        def __call__(self, method, url, headers, body, timeout):
+            raise http.client.IncompleteRead(b"partial")
+
+    snap = HACache(fetch=Broken(STATES), clock=Clock()).snapshot(_ha(OUT, WX), 15)
+    assert (snap["ok"], snap["stale"], snap["items"], snap["forecast"]) == (False, True, [], None)
+
+
+@pytest.mark.parametrize(  # final review #2
+    "attrs", [{"current_temperature": None, "hvac_action": "idle"}, {"current_temperature": "n/a"}]
+)
+def test_climate_without_a_reading_shows_a_dash(attrs: dict) -> None:
+    assert display_value("temps", "heat", None, attrs) == "—"
+
+
+def test_weather_with_non_numeric_temperature_shows_a_dash() -> None:
+    assert display_value("weather", "sunny", None, {"temperature": "n/a"}) == "—"
+
+
+@pytest.mark.parametrize(  # final review: a missing low rendered as "L 0°"
+    "today,expected",
+    [
+        ({"temperature": 78, "templow": 51}, "H 78°  L 51°"),
+        ({"temperature": 78.4, "templow": None}, "H 78°"),
+        ({"temperature": None, "templow": 51}, "L 51°"),
+        ({"temperature": "n/a"}, None),
+    ],
+)
+def test_forecast_display_never_invents_values(today: dict, expected: str | None) -> None:
+    snap = HACache(fetch=FakeHA(STATES, forecast=[today]), clock=Clock()).snapshot(_ha(WX), 15)
+    assert (snap["forecast"] or {}).get("display") == expected

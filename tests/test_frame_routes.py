@@ -266,3 +266,31 @@ def test_night_mode_turns_text_red_and_dims_cameras_more_than_text(tmp_path: Pat
     assert "#frame.night .tile img" in css and "opacity: 0.3" in css
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
     assert 'root.className = want ? "night" : ""' in body
+
+
+def test_state_survives_an_unexpected_ha_failure(tmp_path: Path, monkeypatch, at) -> None:
+    # final review #1: an HA fault must never take dimming and the clock down with it.
+    at(23, 0)
+
+    def boom(self, ha, refresh_seconds):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(ha_mod.HACache, "snapshot", boom)
+    resp = _get(_client(_config(tmp_path)), "/frame/state")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["dim"]["active"] is True
+    assert data["ha"] == {
+        "ok": False, "stale": True, "age_seconds": None, "items": [], "forecast": None
+    }
+
+
+def test_page_renders_initial_dim_state_so_a_reload_does_not_flash(tmp_path: Path, at) -> None:
+    # final review #3: the nightly 04:00 reload sits inside the dim window.
+    at(4, 0)
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'id="frame" class="night"' in body
+    assert 'data-dim-active="true"' in body and 'data-dim-level="0.12"' in body
+    at(12, 0)
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'data-dim-active="false"' in body and 'class="night"' not in body
