@@ -147,7 +147,7 @@ frame: # optional LAN-only kiosk dashboard at /frame (needs livestream.enabled +
   dim: # night dimming of the frame's backlight; set `dim: null` to disable
     start: "22:00"
     end: "06:30" # windows may wrap past midnight
-    level: 0.03 # 0..1 backlight while dimmed
+    level: 0.12 # 0..1 backlight while dimmed; camera images fade further, text turns red
     wake_seconds: 60 # full brightness after a tap
 
 homeassistant: # read-only source for the /frame strip; the token never leaves this server

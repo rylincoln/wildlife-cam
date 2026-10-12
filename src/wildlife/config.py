@@ -458,7 +458,7 @@ class DimConfig(BaseModel):
 
     start: str = "22:00"
     end: str = "06:30"
-    level: float = Field(default=0.03, ge=0.0, le=1.0)  # backlight while dimmed (0..1)
+    level: float = Field(default=0.12, ge=0.0, le=1.0)  # backlight while dimmed (0..1)
     wake_seconds: int = Field(default=60, ge=5, le=3600)  # full brightness after a tap
 
     @field_validator("start", "end")

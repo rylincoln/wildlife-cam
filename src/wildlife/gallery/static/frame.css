@@ -1,0 +1,71 @@
+/* /frame kiosk: fixed 1280x800 landscape panel. Must stay Chrome/WebView 106 safe:
+   tests/test_frame_routes.py::test_frame_css_is_chrome_106_safe lists the banned features. */
+:root {
+  --bg: #000;
+  --fg: #f2f2f2;
+  --muted: #9aa0a6;
+  --accent: #f6c343;
+  --warn: #ff6b6b;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body {
+  width: 1280px;
+  height: 800px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#frame { position: relative; width: 1280px; height: 800px; display: flex; flex-direction: column; }
+.cams { display: flex; height: 360px; }
+.tile { position: relative; width: 640px; height: 360px; background: #111; overflow: hidden; }
+.tile img, #full img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tile.down img { visibility: hidden; }
+figcaption {
+  position: absolute;
+  left: 12px;
+  top: 10px;   /* top-left: Reolink's own name/time overlays sit at the bottom and top-centre */
+  font-size: 16px;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+  text-transform: capitalize;
+}
+.badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--accent);
+  font-size: 16px;
+}
+.notice { padding: 24px; color: var(--muted); font-size: 22px; }
+.strip { flex: 1; display: flex; gap: 36px; padding: 28px 36px; }
+.stale { opacity: 0.55; }
+.clock { width: 400px; }
+#time { font-size: 120px; font-weight: 300; line-height: 1; white-space: nowrap; }
+#ampm { margin-left: 10px; font-size: 40px; color: var(--muted); }
+#date { margin-top: 12px; font-size: 30px; color: var(--muted); }
+.weather { width: 360px; }
+.weather .temp { font-size: 96px; font-weight: 300; line-height: 1; }
+.weather .cond { margin-top: 8px; font-size: 32px; }
+.weather .hilo { margin-top: 8px; font-size: 26px; color: var(--muted); }
+#values { flex: 1; display: flex; flex-direction: column; gap: 14px; font-size: 30px; }
+.row { display: flex; justify-content: space-between; }
+.row .label { color: var(--muted); }
+.age { font-size: 18px; color: var(--muted); }
+#offline { top: auto; bottom: 16px; right: 16px; color: var(--warn); }
+#dimmer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; pointer-events: none; }
+#full { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; }
+#full figcaption { font-size: 28px; }
+
+/* Night mode (dim window): the backlight drops to dim.level for everything, so the camera
+   images fade further here while the strip text turns red and keeps the full backlight level. */
+#frame.night .tile img, #frame.night #full img { opacity: 0.3; }
+#frame.night figcaption { color: #b3261e; text-shadow: none; }
+#frame.night .strip, #frame.night .strip .value, #frame.night .weather .temp { color: #ff3b30; }
+#frame.night #date, #frame.night .row .label, #frame.night .hilo, #frame.night #ampm, #frame.night .age { color: #b3261e; }

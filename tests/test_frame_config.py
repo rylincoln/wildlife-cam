@@ -25,7 +25,7 @@ def test_sections_exist_and_default_off() -> None:
 
 def test_dim_defaults() -> None:
     dim = DimConfig()
-    assert (dim.start, dim.end, dim.level, dim.wake_seconds) == ("22:00", "06:30", 0.03, 60)
+    assert (dim.start, dim.end, dim.level, dim.wake_seconds) == ("22:00", "06:30", 0.12, 60)
 
 
 @pytest.mark.parametrize("bad", ["7pm", "24:00", "6:30", "06:60", ""])

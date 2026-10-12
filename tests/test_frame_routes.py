@@ -162,7 +162,7 @@ def test_state_reports_dim_window_and_ha(tmp_path: Path, fake_ha, at) -> None:
     assert resp.headers["Cache-Control"] == "no-store"
     data = resp.get_json()
     assert data["now"] == moment.timestamp()
-    assert data["dim"] == {"active": True, "level": 0.03, "wake_seconds": 60}
+    assert data["dim"] == {"active": True, "level": 0.12, "wake_seconds": 60}
     assert data["ha"]["ok"] is True
     assert data["ha"]["items"][0]["display"] == "68°"
     assert fake_ha == ["http://192.168.1.33:8123/api/states/sensor.outdoor_temp"]
@@ -226,3 +226,43 @@ def test_config_reload_changes_entities_without_restart(tmp_path: Path, fake_ha,
     items = _get(client, "/frame/state").get_json()["ha"]["items"]
     assert [i["label"] for i in items] == ["Shed"]
     assert fake_ha[-1].endswith("/api/states/sensor.other_temp")
+
+
+GALLERY_DIR = Path(__file__).resolve().parents[1] / "src" / "wildlife" / "gallery"
+FORBIDDEN_CSS = ("oklch(", "color-mix(", ":has(", "dvh", "dvw", "svh", "lvh", "@container", "@layer")
+
+
+def test_page_has_strip_overlays_and_stylesheet(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    for element_id in ("time", "date", "weather", "values", "offline", "dimmer", "full"):
+        assert f'id="{element_id}"' in body
+    assert "/static/frame.css" in body
+    assert "FrameNative" in body
+    assert "innerHTML" not in body  # HA strings must be rendered with textContent
+
+
+def test_frame_css_is_chrome_106_safe() -> None:
+    css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
+    for token in FORBIDDEN_CSS:
+        assert token not in css, token
+    assert "&" not in css  # no CSS nesting
+
+
+def test_frame_stylesheet_is_served_on_lan(tmp_path: Path) -> None:
+    resp = _get(_client(_config(tmp_path)), "/static/frame.css")
+    assert resp.status_code == 200 and "1280px" in resp.get_data(as_text=True)
+
+
+def test_camera_images_have_empty_alt_so_a_down_stream_paints_nothing(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert body.count("<img alt=\"\">") == len(CAMERA_IDS) + 1  # tiles + full-screen overlay
+
+
+def test_night_mode_turns_text_red_and_dims_cameras_more_than_text(tmp_path: Path) -> None:
+    # Owner request: at night the strip text goes red and stays brighter than the camera images
+    # (the backlight dims everything equally, so the images get an extra CSS fade).
+    css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
+    assert "#frame.night .strip" in css and "#ff3b30" in css
+    assert "#frame.night .tile img" in css and "opacity: 0.3" in css
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'root.className = want ? "night" : ""' in body
