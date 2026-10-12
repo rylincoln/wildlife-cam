@@ -432,7 +432,9 @@ the camera images further.
    access token (Profile → Security). Put it in `homeassistant.token` with an
    `entities:` allow-list. The token stays on this server; the frame only gets
    the allow-listed, formatted values from `/frame/state`.
-3. Set `frame.enabled: true`. The gallery picks up config changes live.
+3. Set `frame.enabled: true`. Home Assistant values and dim settings follow
+   `config.yaml` on the next poll; camera or layout changes show after the page
+   reloads (two-finger hold → Reload on the frame, or the nightly 04:00 reload).
 
 `/frame`, `/frame/state` and `/frame/info` are refused over the Cloudflare tunnel.
 `/frame/info` shows the last client that polled, to find the frame's (changing) IP.

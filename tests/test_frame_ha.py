@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import urllib.error
 
 import pytest
@@ -254,3 +255,52 @@ def test_weather_with_non_numeric_temperature_shows_a_dash() -> None:
 def test_forecast_display_never_invents_values(today: dict, expected: str | None) -> None:
     snap = HACache(fetch=FakeHA(STATES, forecast=[today]), clock=Clock()).snapshot(_ha(WX), 15)
     assert (snap["forecast"] or {}).get("display") == expected
+
+
+def test_old_forecast_is_dropped_after_six_hours_of_failures() -> None:  # minor #8
+    fake, clock = FakeHA(STATES, forecast=[{"temperature": 78, "templow": 51}]), Clock()
+    cache = HACache(fetch=fake, clock=clock)
+    assert cache.snapshot(_ha(WX), 15)["forecast"]["display"] == "H 78°  L 51°"
+    fake.forecast = None  # the forecast service starts failing
+    clock.t += 6 * 3600 - 1
+    assert cache.snapshot(_ha(WX), 15)["forecast"] is not None
+    clock.t += 1
+    assert cache.snapshot(_ha(WX), 15)["forecast"] is None
+
+
+def test_ha_outage_logs_once_and_recovery_logs_once(caplog) -> None:  # minor #10
+    fake, clock = FakeHA(STATES), Clock()
+    cache = HACache(fetch=fake, clock=clock)
+    cache.snapshot(_ha(OUT), 15)
+    fake.down = True
+    with caplog.at_level(logging.INFO, logger="wildlife.frame.ha"):
+        for _ in range(5):
+            clock.t += 15
+            cache.snapshot(_ha(OUT), 15)
+        fake.down = False
+        clock.t += 15
+        cache.snapshot(_ha(OUT), 15)
+    messages = [r.getMessage() for r in caplog.records]
+    assert sum("unavailable" in m for m in messages) == 1
+    assert sum("reachable again" in m for m in messages) == 1
+
+
+def test_unknown_entity_is_logged_once_per_config(caplog) -> None:  # minor #10
+    bad = HAEntityConfig(id="sensor.typo_temp", slot="temps")
+    fake, clock = FakeHA(STATES), Clock()
+    cache = HACache(fetch=fake, clock=clock)
+    with caplog.at_level(logging.WARNING, logger="wildlife.frame.ha"):
+        for _ in range(3):
+            cache.snapshot(_ha(OUT, bad), 15)
+            clock.t += 15
+    assert sum("sensor.typo_temp" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_repeated_forecast_failures_log_once(caplog) -> None:  # minor #10
+    fake, clock = FakeHA(STATES, forecast=None), Clock()
+    cache = HACache(fetch=fake, clock=clock)
+    with caplog.at_level(logging.INFO, logger="wildlife.frame.ha"):
+        for _ in range(4):
+            cache.snapshot(_ha(WX), 15)
+            clock.t += 61
+    assert sum("forecast" in r.getMessage().lower() for r in caplog.records) == 1

@@ -9,7 +9,8 @@
 <body>
 <main id="frame"{% if dim.active %} class="night"{% endif %} data-refresh="{{ refresh_seconds }}"
       data-dim-active="{{ 'true' if dim.active else 'false' }}" data-dim-level="{{ dim.level }}"
-      data-dim-wake="{{ dim.wake_seconds }}">
+      data-dim-wake="{{ dim.wake_seconds }}" data-dim-start="{{ dim.start or '' }}"
+      data-dim-end="{{ dim.end or '' }}">
   <section class="cams">
   {% if mjpeg_enabled %}
   {% for cam in cameras %}
@@ -20,7 +21,7 @@
     </figure>
   {% endfor %}
   {% else %}
-    <p class="notice">Set livestream.mjpeg in config.yaml to show cameras.</p>
+    <p class="notice">Enable livestream (with livestream.mjpeg) in config.yaml to show cameras.</p>
   {% endif %}
   </section>
   <section class="strip" id="strip">
@@ -37,7 +38,7 @@
   </section>
   <span id="offline" class="badge" hidden>server offline</span>
   <div id="dimmer" hidden></div>
-  <figure id="full" hidden><img alt=""><figcaption></figcaption></figure>
+  <figure id="full" hidden><img alt=""><figcaption></figcaption><span class="badge" hidden>reconnecting</span></figure>
   <section id="birds" hidden>
     <header><span>Recent birds</span><button id="birds-close" type="button">✕</button></header>
     <ul id="bird-list"></ul>
@@ -50,7 +51,6 @@
   var root = document.getElementById("frame");
   var REFRESH_MS = parseInt(root.getAttribute("data-refresh"), 10) * 1000;
   var STREAM_REFRESH_MS = 5 * 60 * 1000;
-  var FULL_TIMEOUT_MS = 60 * 1000;
   var tiles = Array.prototype.slice.call(document.querySelectorAll(".tile"));
   var full = document.getElementById("full");
   var fullImg = full.querySelector("img");
@@ -60,11 +60,16 @@
   var dim = {
     active: root.getAttribute("data-dim-active") === "true",
     level: parseFloat(root.getAttribute("data-dim-level")),
-    wake: parseInt(root.getAttribute("data-dim-wake"), 10)
+    wake: parseInt(root.getAttribute("data-dim-wake"), 10),
+    start: root.getAttribute("data-dim-start"),
+    end: root.getAttribute("data-dim-end")
   };
   var wakeUntil = 0;
   var dimmed = null;
-  var fullTimer = null;
+  var appliedLevel = null;
+  var fullTile = null;     // camera shown full screen (stays until tapped)
+  var fullRetry = null;
+  var fullBadge = full.querySelector(".badge");
   var started = Date.now();
 
   function bust(url) { return url + (url.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now(); }
@@ -82,12 +87,21 @@
     var badge = tile.querySelector(".badge");
     clearTimeout(tile._retry);
     clearTimeout(tile._shown);
+    tile._pending = false;
+    tile._since = Date.now();
     tile._backoff = tile._backoff || 5000;
-    function up() { clearTimeout(tile._shown); tile.className = "tile"; badge.hidden = true; }
+    function up() {
+      clearTimeout(tile._shown);
+      tile.className = "tile";
+      badge.hidden = true;
+      tile._backoff = 5000;
+    }
     // MJPEG <img> may never fire "load" in some WebViews: treat 3 s without an error as up.
     tile._shown = setTimeout(up, 3000);
-    img.onload = function () { up(); tile._backoff = 5000; };
+    img.onload = up;
     img.onerror = function () {
+      if (tile._pending) { return; }   // a reconnect is already scheduled
+      tile._pending = true;
       clearTimeout(tile._shown);
       tile.className = "tile down";   // hides the broken-image placeholder
       badge.hidden = false;
@@ -107,21 +121,36 @@
   function attachAll() { tiles.forEach(attach); }
   function streamsWanted() { return full.hidden && birdsPanel.hidden; }
 
+  function loadFull() {
+    clearTimeout(fullRetry);
+    full._pending = false;
+    full._since = Date.now();
+    if (fullTile) { fullImg.src = bust(fullTile.getAttribute("data-hd")); }
+  }
   function openFull(tile) {
     tiles.forEach(detach);
+    fullTile = tile;
+    full._backoff = 5000;
     full.querySelector("figcaption").textContent = tile.querySelector("figcaption").textContent;
+    fullImg.onload = function () { fullBadge.hidden = true; full._backoff = 5000; };
     fullImg.onerror = function () {
-      setTimeout(function () { if (!full.hidden) { fullImg.src = bust(tile.getAttribute("data-hd")); } }, 5000);
+      if (full._pending) { return; }
+      full._pending = true;
+      fullBadge.hidden = false;
+      clearTimeout(fullRetry);
+      fullRetry = setTimeout(function () { if (fullTile === tile) { loadFull(); } }, full._backoff);
+      full._backoff = Math.min(full._backoff * 2, 60000);
     };
-    fullImg.src = bust(tile.getAttribute("data-hd"));
-    full.hidden = false;
-    clearTimeout(fullTimer);
-    fullTimer = setTimeout(closeFull, FULL_TIMEOUT_MS);
+    loadFull();
+    full.hidden = false;   // stays until tapped
   }
   function closeFull() {
-    clearTimeout(fullTimer);
+    clearTimeout(fullRetry);
+    fullTile = null;
     fullImg.onerror = null;
+    fullImg.onload = null;
     fullImg.removeAttribute("src");
+    fullBadge.hidden = true;
     full.hidden = true;
     attachAll();
   }
@@ -138,12 +167,26 @@
   }
   function applyDim() {
     var want = dim.active && Date.now() >= wakeUntil;
-    if (want === dimmed) { return; }
+    var level = want ? dim.level : -1;
+    if (want === dimmed && level === appliedLevel) { return; }
     dimmed = want;
+    appliedLevel = level;
     root.className = want ? "night" : "";   // red text; cameras fade further than the text
-    setBrightness(want ? dim.level : -1);
+    setBrightness(level);
   }
   function wake() { wakeUntil = Date.now() + dim.wake * 1000; applyDim(); }
+  function minutesOf(hhmm) {
+    var parts = hhmm.split(":");
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+  }
+  // Mirrors wildlife.frame.schedule.in_window (wraps past midnight when start > end).
+  function inDimWindow(date, start, end) {
+    var now = date.getHours() * 60 + date.getMinutes();
+    var begin = minutesOf(start);
+    var finish = minutesOf(end);
+    if (begin === finish) { return false; }
+    return begin < finish ? (now >= begin && now < finish) : (now >= begin || now < finish);
+  }
 
   // ---- taps -------------------------------------------------------------
   function handleTap(action) {
@@ -184,7 +227,8 @@
       (item.slot === "rain" ? rain : values).appendChild(row);
     });
     if (ha.stale && ha.age_seconds !== null) {
-      values.appendChild(el("div", "age", "updated " + Math.round(ha.age_seconds / 60) + " min ago"));
+      var mins = Math.round(ha.age_seconds / 60);
+      values.appendChild(el("div", "age", mins < 1 ? "updated just now" : "updated " + mins + " min ago"));
     }
   }
 
@@ -196,7 +240,7 @@
   function poll() {
     var xhr = new XMLHttpRequest();
     xhr.open("GET", "/frame/state", true);
-    xhr.timeout = 8000;
+    xhr.timeout = 15000;   // > HA timeout (<= 5 s) for states + forecast
     xhr.onload = function () {
       var state;
       if (xhr.status !== 200) { fail(); return; }
@@ -205,7 +249,10 @@
       failures = 0;
       document.getElementById("offline").hidden = true;
       offset = state.now * 1000 - Date.now();
-      dim = { active: state.dim.active, level: state.dim.level, wake: state.dim.wake_seconds };
+      dim = {
+        active: state.dim.active, level: state.dim.level, wake: state.dim.wake_seconds,
+        start: state.dim.start, end: state.dim.end
+      };
       applyDim();
       render(state.ha);
     };
@@ -319,18 +366,43 @@
     document.getElementById("ampm").textContent = parts.slice(1).join(" ");
     document.getElementById("date").textContent =
       now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    if (failures >= 3 && dim.start && dim.end) {
+      dim.active = inDimWindow(now, dim.start, dim.end);   // server unreachable: keep the schedule
+    }
     applyDim();
-    if (now.getHours() === 4 && now.getMinutes() === 0 && Date.now() - started > 120000) {
-      location.reload();   // daily fresh start to shed leaks on the 1 GB frame
+    // Daily fresh start to shed leaks on the 1 GB frame -- only while the server answers, so an
+    // outage never swaps a working page for the kiosk's error screen.
+    if (failures === 0 && now.getHours() === 4 && now.getMinutes() === 0 &&
+        Date.now() - started > 120000) {
+      location.reload();
     }
   }
+
+  // A stream that ends mid-flight leaves the <img> complete with zero width and fires no
+  // error event (seen in Chromium), so check for that and treat it as an error.
+  function broken(img, since) {
+    return img.getAttribute("src") && Date.now() - since > 8000 &&
+      img.complete && img.naturalWidth === 0;
+  }
+  setInterval(function () {
+    if (streamsWanted()) {
+      tiles.forEach(function (tile) {
+        var img = tile.querySelector("img");
+        if (img.onerror && broken(img, tile._since)) { img.onerror(); }
+      });
+    } else if (fullTile && fullImg.onerror && broken(fullImg, full._since)) {
+      fullImg.onerror();
+    }
+  }, 5000);
 
   attachAll();
   poll();
   tick();
   setInterval(poll, REFRESH_MS);
   setInterval(tick, 1000);
-  setInterval(function () { if (streamsWanted()) { attachAll(); } }, STREAM_REFRESH_MS);
+  setInterval(function () {
+    if (streamsWanted()) { attachAll(); } else if (fullTile) { loadFull(); }
+  }, STREAM_REFRESH_MS);
   pollWildlife();
   setInterval(pollWildlife, WILDLIFE_MS);
 }());

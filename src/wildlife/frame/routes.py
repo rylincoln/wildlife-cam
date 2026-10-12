@@ -40,6 +40,8 @@ def _dim_state(cfg: Config, now: datetime) -> dict:
         "active": dim is not None and in_window(now.time(), dim.start, dim.end),
         "level": dim.level if dim is not None else 1.0,
         "wake_seconds": dim.wake_seconds if dim is not None else 0,
+        "start": dim.start if dim is not None else None,  # lets the page keep the schedule
+        "end": dim.end if dim is not None else None,  # while the server is unreachable
     }
 
 
@@ -66,6 +68,13 @@ def create_frame_blueprint(
     cache = HACache()
     seen: dict = {"ip": None, "ua": "", "at": None}
     seen_lock = threading.Lock()
+
+    @bp.before_request
+    def _refuse_cloudflare():
+        # Tunnel traffic always carries Cloudflare headers. Refuse it even when
+        # remote.enabled is off (e.g. cloudflared left running): HA data stays on the LAN.
+        if request.headers.get("Cf-Connecting-IP") or request.headers.get("Cf-Ray"):
+            abort(404)
 
     def _enabled_config() -> Config:
         cfg = get_config()
@@ -94,7 +103,7 @@ def create_frame_blueprint(
         return render_template(
             "frame.html",
             cameras=cameras,
-            mjpeg_enabled=cfg.livestream.mjpeg is not None,
+            mjpeg_enabled=cfg.livestream.enabled and cfg.livestream.mjpeg is not None,
             refresh_seconds=cfg.frame.refresh_seconds,
             dim=_dim_state(cfg, _now()),  # initial state: a reload at night must not flash bright
         )

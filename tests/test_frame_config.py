@@ -82,3 +82,9 @@ def test_entity_validation() -> None:
 
 def test_rain_slot_is_allowed() -> None:
     assert HAEntityConfig(id="sensor.station_daily_rain", slot="rain", label="Rain today").slot == "rain"
+
+
+def test_ha_timeout_is_capped_below_the_page_poll_timeout() -> None:  # minor #9
+    with pytest.raises(ValidationError):
+        HomeAssistantConfig(timeout_seconds=6)
+    assert HomeAssistantConfig(timeout_seconds=5).timeout_seconds == 5

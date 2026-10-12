@@ -502,7 +502,7 @@ class HomeAssistantConfig(BaseModel):
 
     url: str = ""
     token: str = ""
-    timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    timeout_seconds: float = Field(default=3.0, gt=0, le=5)  # stays well under the page's poll timeout
     entities: list[HAEntityConfig] = Field(default_factory=list)
 
     @field_validator("url")

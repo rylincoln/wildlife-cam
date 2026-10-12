@@ -36,6 +36,7 @@ KEPT_ATTRS = (
 )
 FORECAST_TTL_S = 1800.0
 FORECAST_RETRY_S = 60.0
+FORECAST_MAX_AGE_S = 6 * 3600.0  # never show a forecast older than this
 _MISSING = ("", "unavailable", "unknown")
 _DASH = "—"
 CONDITIONS = {
@@ -153,6 +154,11 @@ class HACache:
         self._attempt_at: float | None = None
         self._forecast: dict | None = None
         self._forecast_due = float("-inf")
+        self._forecast_good_at: float | None = None
+        # Log on transitions only, so an outage or a typo doesn't flood the gallery log.
+        self._down = False
+        self._forecast_failing = False
+        self._missing_logged: set[str] = set()
 
     def snapshot(self, ha: HomeAssistantConfig, refresh_seconds: float) -> dict:
         """Return the current snapshot, refreshing from HA when it is older than allowed."""
@@ -168,6 +174,8 @@ class HACache:
                 self._refresh_states(ha, now)
             if now >= self._forecast_due:
                 self._refresh_forecast(ha, now)
+            if self._forecast_good_at is not None and now - self._forecast_good_at >= FORECAST_MAX_AGE_S:
+                self._forecast = None  # yesterday's H/L is worse than none
             age = None if self._good_at is None else round(now - self._good_at)
             return {
                 "ok": self._ok,
@@ -193,11 +201,22 @@ class HACache:
                     if err.code != 404:
                         raise
                     payload = None  # unknown entity: render a dash, keep the rest of the strip
+                    if entity.id not in self._missing_logged:
+                        self._missing_logged.add(entity.id)
+                        logger.warning(
+                            "Home Assistant has no entity %s (check homeassistant.entities)",
+                            entity.id,
+                        )
                 items.append(_shape(entity, payload if isinstance(payload, dict) else None))
         except Exception as err:  # noqa: BLE001 - any HA fault (incl. http.client) -> stale
-            logger.warning("Home Assistant unavailable (%s); serving last good values", err)
+            if not self._down:
+                logger.warning("Home Assistant unavailable (%s); serving last good values", err)
+                self._down = True
             self._ok = False
             return
+        if self._down:
+            logger.info("Home Assistant reachable again")
+            self._down = False
         self._items, self._ok, self._good_at = items, True, now
 
     def _refresh_forecast(self, ha: HomeAssistantConfig, now: float) -> None:
@@ -216,13 +235,17 @@ class HACache:
             entry = service.get(weather.id) if isinstance(service, dict) else None
             days = entry.get("forecast") if isinstance(entry, dict) else None
         except Exception as err:  # noqa: BLE001 - forecast is optional; never fail the strip
-            logger.info("Weather forecast unavailable (%s); retrying in %ss", err, FORECAST_RETRY_S)
+            if not self._forecast_failing:
+                logger.info("Weather forecast unavailable (%s); retrying every %ss", err, FORECAST_RETRY_S)
+                self._forecast_failing = True
             self._forecast_due = now + FORECAST_RETRY_S
             return
+        self._forecast_failing = False
         today = days[0] if isinstance(days, list) and days and isinstance(days[0], dict) else None
         if today is None:
             self._forecast = None
         else:
             high, low = today.get("temperature"), today.get("templow")
             self._forecast = {"high": high, "low": low, "display": _hilo(high, low)}
+            self._forecast_good_at = now
         self._forecast_due = now + FORECAST_TTL_S

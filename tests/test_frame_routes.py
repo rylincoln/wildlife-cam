@@ -163,7 +163,9 @@ def test_state_reports_dim_window_and_ha(tmp_path: Path, fake_ha, at) -> None:
     assert resp.headers["Cache-Control"] == "no-store"
     data = resp.get_json()
     assert data["now"] == moment.timestamp()
-    assert data["dim"] == {"active": True, "level": 0.12, "wake_seconds": 60}
+    assert data["dim"] == {
+        "active": True, "level": 0.12, "wake_seconds": 60, "start": "22:00", "end": "06:30"
+    }
     assert data["ha"]["ok"] is True
     assert data["ha"]["items"][0]["display"] == "68°"
     assert fake_ha == ["http://192.168.1.33:8123/api/states/sensor.outdoor_temp"]
@@ -179,7 +181,9 @@ def test_state_with_dimming_disabled(tmp_path: Path, fake_ha, at) -> None:
     at(23, 0)
     cfg = _config(tmp_path, frame=FrameConfig(enabled=True, dim=None))
     data = _get(_client(cfg), "/frame/state").get_json()
-    assert data["dim"] == {"active": False, "level": 1.0, "wake_seconds": 0}
+    assert data["dim"] == {
+        "active": False, "level": 1.0, "wake_seconds": 0, "start": None, "end": None
+    }
 
 
 def test_state_never_exposes_token(tmp_path: Path, fake_ha, at) -> None:
@@ -302,3 +306,41 @@ def test_page_renders_initial_dim_state_so_a_reload_does_not_flash(tmp_path: Pat
 def test_page_has_rain_rows_container(tmp_path: Path) -> None:
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
     assert 'id="rain"' in body and 'item.slot === "rain"' in body
+
+
+def test_cloudflare_requests_get_404_even_with_remote_disabled(tmp_path: Path) -> None:
+    # minor #13: a cloudflared left running after remote.enabled is switched off must not
+    # expose the HA proxy; tunnel traffic always carries Cloudflare headers.
+    client = _client(_config(tmp_path))
+    for path in ("/frame", "/frame/state", "/frame/info", "/frame/wildlife"):
+        assert _get(client, path, headers={"Cf-Connecting-IP": "203.0.113.9"}).status_code == 404
+        assert _get(client, path, headers={"Cf-Ray": "8a1b2c3d4e5f-SJC"}).status_code == 404
+    assert _get(client, "/frame").status_code == 200
+
+
+def test_cameras_hidden_when_livestream_disabled(tmp_path: Path) -> None:  # minor #14
+    ls = LivestreamConfig(enabled=False, base_path="/go2rtc", mjpeg=MjpegConfig())
+    body = _get(_client(_config(tmp_path, livestream=ls)), "/frame").get_data(as_text=True)
+    assert "/api/stream.mjpeg" not in body and "livestream" in body
+
+
+def test_page_and_state_carry_the_dim_window(tmp_path: Path, fake_ha, at) -> None:  # minor #11
+    at(12, 0)
+    client = _client(_config(tmp_path))
+    dim = _get(client, "/frame/state").get_json()["dim"]
+    assert (dim["start"], dim["end"]) == ("22:00", "06:30")
+    body = _get(client, "/frame").get_data(as_text=True)
+    assert 'data-dim-start="22:00"' in body and 'data-dim-end="06:30"' in body
+
+
+def test_page_script_behaviour_pins(tmp_path: Path) -> None:
+    # Page JS has no unit harness here; these pin the fixes, behaviour is checked in a browser.
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert "FULL_TIMEOUT_MS" not in body  # owner: full screen stays until tapped
+    assert "failures === 0" in body  # minor #12: no 04:00 reload while the server is unreachable
+    assert "just now" in body  # minor #16
+    assert "inDimWindow(" in body  # minor #11: the page keeps the dim schedule offline
+    assert "fullRetry" in body  # minor #5: the full-screen retry timer is tracked and cleared
+    # A stream that ends mid-flight leaves the <img> complete with zero width and no error
+    # event (seen in Chromium); a watchdog must treat that as an error and reconnect.
+    assert "naturalWidth === 0" in body
