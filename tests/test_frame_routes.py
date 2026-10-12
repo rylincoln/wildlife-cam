@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -255,7 +256,9 @@ def test_frame_stylesheet_is_served_on_lan(tmp_path: Path) -> None:
 
 def test_camera_images_have_empty_alt_so_a_down_stream_paints_nothing(tmp_path: Path) -> None:
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
-    assert body.count("<img alt=\"\">") == len(CAMERA_IDS) + 1  # tiles + full-screen overlay
+    alts = re.findall(r'<img alt="([^"]*)"', body)
+    assert len(alts) >= len(CAMERA_IDS) + 1  # tiles + full-screen overlay (+ wildlife thumbs)
+    assert all(alt == "" for alt in alts)
 
 
 def test_night_mode_turns_text_red_and_dims_cameras_more_than_text(tmp_path: Path) -> None:

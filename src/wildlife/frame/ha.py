@@ -102,6 +102,8 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
     text = _num(number)
     if unit in ("°F", "°C"):
         return text + "°"
+    if unit == "%":
+        return text + "%"
     return f"{text} {unit}" if unit else text
 
 

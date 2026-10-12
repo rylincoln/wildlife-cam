@@ -201,6 +201,8 @@ def test_no_forecast_request_without_weather_entity() -> None:
         ("energy", "950", "W", {}, "950 W"),
         ("energy", "12.345", "kWh", {}, "12.3 kWh"),
         ("energy", "charging", None, {}, "charging"),
+        ("energy", "98", "%", {}, "98%"),
+        ("energy", "98.44", "%", {}, "98.4%"),
         ("energy", "nan", "W", {}, "—"),
         ("temps", "heat", None, {"current_temperature": 70.5, "hvac_action": "heating"},
          "70.5° · heating"),

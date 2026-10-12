@@ -419,13 +419,6 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         )
 
     # ----------------------------------------------------------------------- #
-    # Frame kiosk (LAN-only; see wildlife.frame.routes)
-    # ----------------------------------------------------------------------- #
-    from wildlife.frame.routes import create_frame_blueprint
-
-    app.register_blueprint(create_frame_blueprint(get_config, lambda: _live_base(False)))
-
-    # ----------------------------------------------------------------------- #
     # Serialization + query helpers
     # ----------------------------------------------------------------------- #
     def _serialize(row: dict) -> dict:
@@ -479,6 +472,20 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         )
         has_more = len(rows) > page_size
         return [_serialize(r) for r in rows[:page_size]], has_more
+
+    # ----------------------------------------------------------------------- #
+    # Frame kiosk (LAN-only; see wildlife.frame.routes)
+    # ----------------------------------------------------------------------- #
+    def _recent_captures(source_kind: str, limit: int) -> list[dict]:
+        """Newest-first serialized captures of one provenance, for the frame panel."""
+        rows = get_store().query(source_kind=source_kind, limit=limit)
+        return [_serialize(r) for r in rows]
+
+    from wildlife.frame.routes import create_frame_blueprint
+
+    app.register_blueprint(
+        create_frame_blueprint(get_config, lambda: _live_base(False), _recent_captures)
+    )
 
     # ----------------------------------------------------------------------- #
     # Routes

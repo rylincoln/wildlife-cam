@@ -24,13 +24,24 @@
   {% endif %}
   </section>
   <section class="strip" id="strip">
-    <div class="clock"><div id="time"><span id="hm">--:--</span><span id="ampm"></span></div><div id="date"></div></div>
-    <div class="weather" id="weather"></div>
+    <div class="clock">
+      <div id="time"><span id="hm">--:--</span><span id="ampm"></span></div><div id="date"></div>
+      <div id="sighting" class="sighting" hidden><img alt=""><div class="cap"></div></div>
+    </div>
+    <div class="mid">
+      <div class="weather" id="weather"></div>
+      <div id="bird" class="bird" hidden><img alt=""><div class="cap"></div></div>
+    </div>
     <div id="values"></div>
   </section>
   <span id="offline" class="badge" hidden>server offline</span>
   <div id="dimmer" hidden></div>
   <figure id="full" hidden><img alt=""><figcaption></figcaption></figure>
+  <section id="birds" hidden>
+    <header><span>Recent birds</span><button id="birds-close" type="button">✕</button></header>
+    <ul id="bird-list"></ul>
+  </section>
+  <audio id="player" preload="none"></audio>
 </main>
 <script>
 (function () {
@@ -80,7 +91,7 @@
       tile.className = "tile down";   // hides the broken-image placeholder
       badge.hidden = false;
       clearTimeout(tile._retry);
-      tile._retry = setTimeout(function () { if (full.hidden) { attach(tile); } }, tile._backoff);
+      tile._retry = setTimeout(function () { if (streamsWanted()) { attach(tile); } }, tile._backoff);
       tile._backoff = Math.min(tile._backoff * 2, 60000);
     };
     img.src = bust(tile.getAttribute("data-src"));
@@ -93,6 +104,7 @@
     img.removeAttribute("src");   // aborts the MJPEG download
   }
   function attachAll() { tiles.forEach(attach); }
+  function streamsWanted() { return full.hidden && birdsPanel.hidden; }
 
   function openFull(tile) {
     tiles.forEach(detach);
@@ -185,7 +197,7 @@
       var state;
       if (xhr.status !== 200) { fail(); return; }
       try { state = JSON.parse(xhr.responseText); } catch (e) { fail(); return; }
-      if (failures >= 3 && full.hidden) { attachAll(); }   // server is back: reconnect streams
+      if (failures >= 3 && streamsWanted()) { attachAll(); }   // server is back: reconnect streams
       failures = 0;
       document.getElementById("offline").hidden = true;
       offset = state.now * 1000 - Date.now();
@@ -197,6 +209,102 @@
     xhr.ontimeout = fail;
     xhr.send();
   }
+
+  // ---- wildlife sighting + birds ------------------------------------------
+  var WILDLIFE_MS = 60 * 1000;
+  var BIRDS_IDLE_MS = 60 * 1000;
+  var birdsPanel = document.getElementById("birds");
+  var player = document.getElementById("player");
+  var birdsTimer = null;
+  var latestBirds = [];
+  var playingButton = null;
+
+  function showThumb(box, url, text) {
+    var img = box.querySelector("img");
+    if (url) { img.src = url; img.hidden = false; } else { img.hidden = true; }
+    box.querySelector(".cap").textContent = text;
+    box.hidden = false;
+  }
+  function renderWildlife(w) {
+    var sighting = document.getElementById("sighting");
+    var bird = document.getElementById("bird");
+    if (w.sighting) {
+      showThumb(sighting, w.sighting.thumb_url, w.sighting.label + " \u00b7 " + w.sighting.time);
+    } else { sighting.hidden = true; }
+    latestBirds = w.birds || [];
+    if (latestBirds.length) {
+      showThumb(bird, latestBirds[0].photo_url, latestBirds[0].label + " \u00b7 " + latestBirds[0].time);
+    } else { bird.hidden = true; }
+  }
+  function pollWildlife() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/frame/wildlife", true);
+    xhr.timeout = 8000;
+    xhr.onload = function () {
+      if (xhr.status !== 200) { return; }
+      try { renderWildlife(JSON.parse(xhr.responseText)); } catch (e) { /* keep the last panel */ }
+    };
+    xhr.send();
+  }
+  function resetPlaying() {
+    if (playingButton) { playingButton.textContent = "\u25B6"; playingButton = null; }
+  }
+  function playClip(url, button) {
+    bumpBirds();
+    if (playingButton === button && !player.paused) { player.pause(); resetPlaying(); return; }
+    resetPlaying();
+    player.src = url;
+    var started = player.play();
+    if (started && started.catch) { started.catch(resetPlaying); }
+    button.textContent = "\u25A0";
+    playingButton = button;
+  }
+  player.addEventListener("ended", resetPlaying);
+  player.addEventListener("error", resetPlaying);
+  function renderBirdList() {
+    var list = document.getElementById("bird-list");
+    clear(list);
+    latestBirds.forEach(function (bird) {
+      var row = el("li", "bird-row");
+      var img = el("img");
+      img.alt = "";
+      if (bird.photo_url) { img.src = bird.photo_url; }
+      row.appendChild(img);
+      var text = el("div", "bird-text");
+      text.appendChild(el("div", "bird-name", bird.label));
+      text.appendChild(el("div", "bird-meta", bird.time + (bird.confidence ? " \u00b7 " + bird.confidence : "")));
+      row.appendChild(text);
+      if (bird.audio_url) {
+        var play = el("button", "play", "\u25B6");
+        play.type = "button";
+        play.addEventListener("click", function (ev) { ev.stopPropagation(); playClip(bird.audio_url, play); });
+        row.appendChild(play);
+      }
+      list.appendChild(row);
+    });
+  }
+  function bumpBirds() { clearTimeout(birdsTimer); birdsTimer = setTimeout(closeBirds, BIRDS_IDLE_MS); }
+  function openBirds() {
+    if (!latestBirds.length) { return; }
+    tiles.forEach(detach);
+    renderBirdList();
+    birdsPanel.hidden = false;
+    bumpBirds();
+  }
+  function closeBirds() {
+    clearTimeout(birdsTimer);
+    player.pause();
+    player.removeAttribute("src");
+    resetPlaying();
+    birdsPanel.hidden = true;
+    if (full.hidden) { attachAll(); }
+  }
+  document.getElementById("bird").addEventListener("click", handleTap(openBirds));
+  document.getElementById("birds-close").addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    closeBirds();
+  });
+  birdsPanel.addEventListener("click", bumpBirds);
 
   // ---- clock + housekeeping ---------------------------------------------
   function tick() {
@@ -218,7 +326,9 @@
   tick();
   setInterval(poll, REFRESH_MS);
   setInterval(tick, 1000);
-  setInterval(function () { if (full.hidden) { attachAll(); } }, STREAM_REFRESH_MS);
+  setInterval(function () { if (streamsWanted()) { attachAll(); } }, STREAM_REFRESH_MS);
+  pollWildlife();
+  setInterval(pollWildlife, WILDLIFE_MS);
 }());
 </script>
 </body>

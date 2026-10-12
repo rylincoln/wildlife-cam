@@ -50,7 +50,7 @@ figcaption {
 #time { font-size: 120px; font-weight: 300; line-height: 1; white-space: nowrap; }
 #ampm { margin-left: 10px; font-size: 40px; color: var(--muted); }
 #date { margin-top: 12px; font-size: 30px; color: var(--muted); }
-.weather { width: 360px; }
+.mid { width: 360px; }
 .weather .temp { font-size: 96px; font-weight: 300; line-height: 1; }
 .weather .cond { margin-top: 8px; font-size: 32px; }
 .weather .hilo { margin-top: 8px; font-size: 26px; color: var(--muted); }
@@ -63,9 +63,28 @@ figcaption {
 #full { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; }
 #full figcaption { font-size: 28px; }
 
+/* Wildlife: latest camera sighting under the clock, latest bird under the weather. */
+.sighting, .bird { display: flex; align-items: center; gap: 14px; margin-top: 22px; }
+.sighting img { width: 160px; height: 90px; object-fit: cover; border-radius: 6px; background: #111; }
+.bird img { width: 72px; height: 72px; object-fit: cover; border-radius: 36px; background: #111; }
+.cap { font-size: 22px; color: var(--muted); }
+.bird .cap { color: var(--fg); }
+#birds { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; padding: 20px 36px; }
+#birds header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; font-size: 32px; }
+#birds-close, .play { width: 56px; height: 56px; border: 0; border-radius: 28px; background: #222; color: var(--fg); font-size: 24px; }
+#bird-list { display: flex; flex-wrap: wrap; gap: 8px 24px; list-style: none; }
+.bird-row { display: flex; align-items: center; gap: 16px; width: 580px; padding: 4px 0; }
+.bird-row img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; background: #111; }
+.bird-text { flex: 1; }
+.bird-name { font-size: 28px; }
+.bird-meta { font-size: 20px; color: var(--muted); }
+
 /* Night mode (dim window): the backlight drops to dim.level for everything, so the camera
    images fade further here while the strip text turns red and keeps the full backlight level. */
-#frame.night .tile img, #frame.night #full img { opacity: 0.3; }
+#frame.night .tile img, #frame.night #full img, #frame.night .sighting img,
+#frame.night .bird img, #frame.night .bird-row img { opacity: 0.3; }
 #frame.night figcaption { color: #b3261e; text-shadow: none; }
-#frame.night .strip, #frame.night .strip .value, #frame.night .weather .temp { color: #ff3b30; }
-#frame.night #date, #frame.night .row .label, #frame.night .hilo, #frame.night #ampm, #frame.night .age { color: #b3261e; }
+#frame.night .strip, #frame.night .strip .value, #frame.night .weather .temp,
+#frame.night .bird .cap, #frame.night #birds, #frame.night .play, #frame.night #birds-close { color: #ff3b30; }
+#frame.night #date, #frame.night .row .label, #frame.night .hilo, #frame.night #ampm, #frame.night .age,
+#frame.night .cap, #frame.night .bird-meta { color: #b3261e; }
