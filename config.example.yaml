@@ -139,3 +139,23 @@ megadetector: # optional MegaDetector v6 second pass over the species detector (
   rescue_min_confidence: 0.5 # rescue bypasses the species gate + saves a generic label, so require this (higher than `confidence`) to avoid saving low-conf/hiccup detections
   rescue_cooldown_s: 0 # per-camera min seconds between rescue MD runs; raise (e.g. 15) on a motion-heavy camera so wind-blown vegetation doesn't fire the heavy 1280px pass every event
   suppress_false_positives: false # drop a kept detection MD sees nothing behind (opt-in; MD can miss too)
+
+frame: # optional LAN-only kiosk dashboard at /frame (needs livestream.enabled + livestream.mjpeg)
+  enabled: false
+  cameras: [] # on-screen order of camera ids; empty = all cameras
+  refresh_seconds: 15 # how often the page polls /frame/state
+  dim: # night dimming of the frame's backlight; set `dim: null` to disable
+    start: "22:00"
+    end: "06:30" # windows may wrap past midnight
+    level: 0.03 # 0..1 backlight while dimmed
+    wake_seconds: 60 # full brightness after a tap
+
+homeassistant: # read-only source for the /frame strip; the token never leaves this server
+  url: "" # e.g. http://192.168.1.33:8123
+  token: "" # long-lived access token of a dedicated non-admin HA user
+  timeout_seconds: 3
+  entities: [] # allow-list, e.g.
+  #  - {id: weather.forecast_home, slot: weather}
+  #  - {id: sensor.outdoor_temperature, slot: temps, label: Outside}
+  #  - {id: climate.thermostat, slot: temps, label: Inside}
+  #  - {id: sensor.house_power, slot: energy, label: House}

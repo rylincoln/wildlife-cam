@@ -41,6 +41,10 @@ __all__ = [
     "ContinuousConfig",
     "AudioConfig",
     "MegadetectorConfig",
+    "DimConfig",
+    "FrameConfig",
+    "HAEntityConfig",
+    "HomeAssistantConfig",
     "Config",
     "load_config",
 ]
@@ -442,6 +446,71 @@ class MegadetectorConfig(BaseModel):
         return self
 
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class DimConfig(BaseModel):
+    """Night window during which the /frame kiosk dims its backlight.
+
+    ``start``/``end`` are local 24-hour ``HH:MM`` times on the gallery host; a window
+    whose start is after its end wraps past midnight (e.g. 22:00 -> 06:30).
+    """
+
+    start: str = "22:00"
+    end: str = "06:30"
+    level: float = Field(default=0.03, ge=0.0, le=1.0)  # backlight while dimmed (0..1)
+    wake_seconds: int = Field(default=60, ge=5, le=3600)  # full brightness after a tap
+
+    @field_validator("start", "end")
+    @classmethod
+    def _hhmm(cls, value: str) -> str:
+        value = value.strip()
+        if not _HHMM.match(value):
+            raise ValueError("expected a 24-hour HH:MM time, e.g. 22:00")
+        return value
+
+
+class FrameConfig(BaseModel):
+    """LAN-only kiosk dashboard (/frame) for the picture-frame display.
+
+    Off by default. ``cameras`` sets on-screen order; ids not present in
+    ``cameras:`` are ignored and an empty (or all-unknown) list shows every camera.
+    ``dim: null`` disables night dimming.
+    """
+
+    enabled: bool = False
+    cameras: list[str] = Field(default_factory=list)
+    refresh_seconds: int = Field(default=15, ge=5, le=600)
+    dim: DimConfig | None = Field(default_factory=DimConfig)
+
+
+class HAEntityConfig(BaseModel):
+    """One allow-listed Home Assistant entity shown in the frame's strip."""
+
+    id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+    slot: Literal["weather", "temps", "energy"]
+    label: str = ""  # empty -> HA friendly_name
+
+
+class HomeAssistantConfig(BaseModel):
+    """Read-only Home Assistant source for /frame/state.
+
+    ``token`` is a long-lived access token (ideally of a dedicated non-admin user).
+    It stays on this server: the frame only ever receives allow-listed, filtered
+    values. With no url/token/entities nothing is fetched.
+    """
+
+    url: str = ""
+    token: str = ""
+    timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    entities: list[HAEntityConfig] = Field(default_factory=list)
+
+    @field_validator("url")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -460,6 +529,8 @@ class Config(BaseModel):
     continuous: ContinuousConfig = Field(default_factory=ContinuousConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     megadetector: MegadetectorConfig = Field(default_factory=MegadetectorConfig)
+    frame: FrameConfig = Field(default_factory=FrameConfig)
+    homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":
