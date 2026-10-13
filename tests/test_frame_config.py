@@ -84,6 +84,16 @@ def test_rain_slot_is_allowed() -> None:
     assert HAEntityConfig(id="sensor.station_daily_rain", slot="rain", label="Rain today").slot == "rain"
 
 
+def test_energy_row_can_name_a_battery_flow_sensor() -> None:
+    entity = HAEntityConfig(
+        id="sensor.shop_battery_soc", slot="energy", label="Shop battery", flow="sensor.shop_shunt_power"
+    )
+    assert entity.flow == "sensor.shop_shunt_power"
+    assert HAEntityConfig(id="sensor.shop_battery_soc", slot="energy").flow is None
+    with pytest.raises(ValidationError):  # same allow-list rule as id: no path tricks into the HA API
+        HAEntityConfig(id="sensor.shop_battery_soc", slot="energy", flow="sensor.x/../../api")
+
+
 def test_ha_timeout_is_capped_below_the_page_poll_timeout() -> None:  # minor #9
     with pytest.raises(ValidationError):
         HomeAssistantConfig(timeout_seconds=6)

@@ -344,3 +344,25 @@ def test_page_script_behaviour_pins(tmp_path: Path) -> None:
     # A stream that ends mid-flight leaves the <img> complete with zero width and no error
     # event (seen in Chromium); a watchdog must treat that as an error and reconnect.
     assert "naturalWidth === 0" in body
+
+
+def test_state_carries_battery_flow(tmp_path: Path, monkeypatch, at) -> None:
+    at(12, 0)
+    states = {
+        "sensor.shop_battery_soc": {"state": "75.3", "attributes": {"unit_of_measurement": "%"}},
+        "sensor.shop_shunt_power": {"state": "-420", "attributes": {"unit_of_measurement": "W"}},
+    }
+    monkeypatch.setattr(ha_mod, "urllib_fetch", lambda m, url, h, b, t: states[url.rsplit("/", 1)[1]])
+    cfg = _config(tmp_path)
+    cfg.homeassistant.entities = [
+        HAEntityConfig(
+            id="sensor.shop_battery_soc", slot="energy", label="Shop battery", flow="sensor.shop_shunt_power"
+        )
+    ]
+    item = _get(_client(cfg), "/frame/state").get_json()["ha"]["items"][0]
+    assert (item["label"], item["display"], item["flow"]) == ("Shop battery", "75%", "−420 W")
+
+
+def test_page_renders_battery_flow_inside_the_value(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'el("span", "flow", item.flow)' in body

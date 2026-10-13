@@ -223,7 +223,11 @@
       }
       var row = el("div", "row");
       row.appendChild(el("span", "label", item.label));
-      row.appendChild(el("span", "value", item.display));
+      var value = el("span", "value", item.display);
+      if (item.flow) {   // battery in/out, signed server-side: "+1.3 kW" charging, "−420 W" discharging
+        value.appendChild(el("span", "flow", item.flow));
+      }
+      row.appendChild(value);
       (item.slot === "rain" ? rain : values).appendChild(row);
     });
     if (ha.stale && ha.age_seconds !== null) {

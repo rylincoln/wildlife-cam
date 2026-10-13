@@ -24,7 +24,7 @@ from wildlife.config import HAEntityConfig, HomeAssistantConfig
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["KEPT_ATTRS", "HACache", "display_value", "urllib_fetch"]
+__all__ = ["KEPT_ATTRS", "HACache", "display_value", "flow_value", "urllib_fetch"]
 
 KEPT_ATTRS = (
     "temperature",
@@ -110,6 +110,25 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
     return f"{text} {unit}" if unit else text
 
 
+def flow_value(state: str | None, unit: str | None) -> str | None:
+    """Signed battery power ('+98 W', '−1.3 kW', '0 W'); None when there is no usable reading."""
+    if unit not in ("W", "kW"):
+        return None
+    try:
+        watts = float(state) * (1000 if unit == "kW" else 1)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(watts) or math.isinf(watts):
+        return None
+    whole = round(watts)
+    sign = "+" if whole > 0 else "−" if whole < 0 else ""
+    if abs(whole) >= 10000:  # whole kW keeps "100%  −11 kW" on one line
+        return f"{sign}{round(abs(watts) / 1000)} kW"
+    if abs(whole) >= 1000:
+        return f"{sign}{_num(abs(watts) / 1000)} kW"
+    return f"{sign}{abs(whole)} W"
+
+
 def _hilo(high: Any, low: Any) -> str | None:
     """'H 78°  L 51°' from today's forecast, leaving out missing parts (never 'L 0°')."""
     parts = []
@@ -120,19 +139,29 @@ def _hilo(high: Any, low: Any) -> str | None:
     return "  ".join(parts) or None
 
 
-def _shape(entity: HAEntityConfig, payload: dict | None) -> dict:
+def _shape(entity: HAEntityConfig, payload: dict | None, flow_payload: dict | None = None) -> dict:
     payload = payload or {}
     attrs = payload.get("attributes") or {}
     state = payload.get("state")
     unit = attrs.get("unit_of_measurement")
     kept = {k: attrs[k] for k in KEPT_ATTRS if k in attrs}
+    display = display_value(entity.slot, state, unit, kept)
+    flow = None
+    if entity.flow:
+        if unit == "%" and display != _DASH:
+            display = f"{round(float(state))}%"  # whole percent leaves room for the flow
+        flow_payload = flow_payload or {}
+        flow = flow_value(
+            flow_payload.get("state"), (flow_payload.get("attributes") or {}).get("unit_of_measurement")
+        )
     return {
         "slot": entity.slot,
         "label": entity.label or attrs.get("friendly_name") or entity.id,
         "state": state,
         "unit": unit,
         "attrs": kept,
-        "display": display_value(entity.slot, state, unit, kept),
+        "display": display,
+        "flow": flow,
         "detail": CONDITIONS.get(state, str(state or "")) if entity.slot == "weather" else "",
     }
 
@@ -162,7 +191,12 @@ class HACache:
 
     def snapshot(self, ha: HomeAssistantConfig, refresh_seconds: float) -> dict:
         """Return the current snapshot, refreshing from HA when it is older than allowed."""
-        key = (ha.url, ha.token, ha.timeout_seconds, tuple((e.id, e.slot, e.label) for e in ha.entities))
+        key = (
+            ha.url,
+            ha.token,
+            ha.timeout_seconds,
+            tuple((e.id, e.slot, e.label, e.flow) for e in ha.entities),
+        )
         with self._lock:
             if key != self._key:
                 self._reset(key)  # allow-list/token/url changed: drop everything cached
@@ -191,23 +225,27 @@ class HACache:
         headers = {"Authorization": f"Bearer {ha.token}", "Content-Type": "application/json"}
         return fetch(method, ha.url + path, headers, body, ha.timeout_seconds)
 
+    def _state(self, ha: HomeAssistantConfig, entity_id: str) -> dict | None:
+        """One entity's state, or None when HA doesn't know it (other HTTP errors propagate)."""
+        try:
+            payload = self._call(ha, "GET", f"/api/states/{entity_id}")
+        except urllib.error.HTTPError as err:
+            if err.code != 404:
+                raise
+            # Unknown entity: render a dash, keep the rest of the strip.
+            if entity_id not in self._missing_logged:
+                self._missing_logged.add(entity_id)
+                logger.warning("Home Assistant has no entity %s (check homeassistant.entities)", entity_id)
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _refresh_states(self, ha: HomeAssistantConfig, now: float) -> None:
         items: list[dict] = []
         try:
             for entity in ha.entities:
-                try:
-                    payload = self._call(ha, "GET", f"/api/states/{entity.id}")
-                except urllib.error.HTTPError as err:
-                    if err.code != 404:
-                        raise
-                    payload = None  # unknown entity: render a dash, keep the rest of the strip
-                    if entity.id not in self._missing_logged:
-                        self._missing_logged.add(entity.id)
-                        logger.warning(
-                            "Home Assistant has no entity %s (check homeassistant.entities)",
-                            entity.id,
-                        )
-                items.append(_shape(entity, payload if isinstance(payload, dict) else None))
+                payload = self._state(ha, entity.id)
+                flow_payload = self._state(ha, entity.flow) if entity.flow else None
+                items.append(_shape(entity, payload, flow_payload))
         except Exception as err:  # noqa: BLE001 - any HA fault (incl. http.client) -> stale
             if not self._down:
                 logger.warning("Home Assistant unavailable (%s); serving last good values", err)

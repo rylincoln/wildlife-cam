@@ -58,6 +58,7 @@ figcaption {
 #values { flex: 1; display: flex; flex-direction: column; gap: 14px; font-size: 30px; }
 .row { display: flex; justify-content: space-between; }
 .row .label { color: var(--muted); }
+.row .flow { margin-left: 18px; }
 .age { font-size: 18px; color: var(--muted); }
 #offline { top: auto; bottom: 16px; right: 16px; color: var(--warn); }
 #dimmer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; pointer-events: none; }
