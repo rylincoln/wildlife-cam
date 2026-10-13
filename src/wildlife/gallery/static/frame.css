@@ -1,11 +1,19 @@
 /* /frame kiosk: fixed 1280x800 landscape panel. Must stay Chrome/WebView 106 safe:
    tests/test_frame_routes.py::test_frame_css_is_chrome_106_safe lists the banned features. */
+/* Palette from the high desert: warm snow text, sage labels, and accents that each mean one
+   thing (sun = solar output, juniper = charging / healthy charge, sandstone and ember = low and
+   critical charge, sky = water). Night mode turns every one of them red. */
 :root {
   --bg: #000;
-  --fg: #f2f2f2;
-  --muted: #9aa0a6;
+  --fg: #f2efe9;
+  --muted: #8e978a;
   --accent: #f6c343;
   --warn: #ff6b6b;
+  --sun: #f4c35a;
+  --juniper: #7dba7a;
+  --sand: #e39a4f;
+  --ember: #e0614a;
+  --sky: #86b7d9;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
@@ -60,6 +68,22 @@ figcaption {
 #values { flex: 1; display: flex; flex-direction: column; gap: 14px; font-size: 30px; }
 .row { display: flex; justify-content: space-between; }
 .row .label { color: var(--muted); }
+/* Digits keep one width so values don't shuffle sideways as they update. */
+#values, .rain, #time, .cap-time { font-variant-numeric: tabular-nums; }
+/* Icons say what a row is; the label says where (shown once per place). */
+#values .label { display: flex; align-items: center; }
+.ico { flex: none; display: inline-flex; width: 26px; height: 26px; margin-right: 12px; color: var(--muted); }
+.ico .fill { fill: var(--muted); }
+.ico .fill.tone-ok { fill: var(--juniper); }
+.ico .fill.tone-low { fill: var(--sand); }
+.ico .fill.tone-critical { fill: var(--ember); }
+.value.tone-sun { color: var(--sun); }
+.flow.tone-in { color: var(--juniper); }
+#rain .value { color: var(--sky); }
+.weather .temp { display: flex; align-items: center; }
+.wx { display: inline-flex; margin-left: 18px; color: var(--muted); }
+.wx.tone-sun { color: var(--sun); }
+.wx.tone-sky { color: var(--sky); }
 .row .flow { margin-left: 18px; }
 .age { font-size: 18px; color: var(--muted); }
 #offline { top: auto; bottom: 16px; right: 16px; color: var(--warn); }
@@ -71,6 +95,11 @@ figcaption {
 .sighting, .bird { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
 .sighting img { width: 160px; height: 90px; object-fit: cover; border-radius: 6px; background: #111; }
 .bird img { width: 72px; height: 72px; margin: 0 44px; object-fit: cover; border-radius: 36px; background: #111; }  /* centred in the 160px thumb width so captions line up */
+.bird .ph {  /* a bird outline when the species has no reference photo */
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 72px; height: 72px; margin: 0 44px; border-radius: 36px;
+  background: rgba(142, 151, 138, 0.14); color: var(--muted);
+}
 .cap { flex: 1; min-width: 0; font-size: 22px; color: var(--muted); }
 .cap-name, .cap-time { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cap-time { margin-top: 2px; font-size: 20px; color: var(--muted); }
@@ -103,6 +132,10 @@ figcaption {
 
 /* Night mode (dim window): the backlight drops to dim.level for everything, so the camera
    images fade further here while the strip text turns red and keeps the full backlight level. */
+#frame.night {
+  --fg: #ff3b30; --muted: #b3261e; --sun: #ff3b30; --juniper: #ff3b30;
+  --sand: #ff3b30; --ember: #ff3b30; --sky: #ff3b30; --accent: #ff3b30; --warn: #ff3b30;
+}
 #frame.night .tile img, #frame.night #full img, #frame.night .sighting img,
 #frame.night .bird img, #frame.night .bird-row img, #frame.night .sighting-cell img,
 #frame.night #sighting-view img { opacity: 0.3; }

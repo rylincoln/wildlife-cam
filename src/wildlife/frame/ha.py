@@ -60,6 +60,24 @@ CONDITIONS = {
 
 _COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
 COMPANIONS = ("flow", "direction", "gust")  # extra entities a row may name (fetched with it)
+# Weather condition -> (glyph the page draws, colour tone). Unlisted conditions get no glyph.
+WEATHER_GLYPHS = {
+    "sunny": ("sun", "sun"),
+    "clear-night": ("moon", None),
+    "partlycloudy": ("partly", "sun"),
+    "cloudy": ("cloud", None),
+    "fog": ("fog", None),
+    "rainy": ("rain", "sky"),
+    "pouring": ("rain", "sky"),
+    "lightning": ("storm", "sky"),
+    "lightning-rainy": ("storm", "sky"),
+    "snowy": ("snow", "sky"),
+    "snowy-rainy": ("snow", "sky"),
+    "hail": ("snow", "sky"),
+    "windy": ("wind", None),
+    "windy-variant": ("wind", None),
+}
+BATTERY_OK, BATTERY_LOW = 50.0, 25.0  # fill colour: ok at/above 50 %, low at/above 25 %, else critical
 
 Fetch = Callable[[str, str, dict, "bytes | None", float], Any]
 
@@ -108,7 +126,9 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
         return f"{number:.2f} inHg"
     if unit in ("mph", "km/h"):  # wind: whole numbers read faster
         return f"{round(number)} {unit}"
-    if unit == "W" and abs(number) >= 1000:
+    if unit == "W" and abs(round(number)) < 1000:  # whole watts; tenths are noise at a glance
+        return f"{round(number) or 0} W"
+    if unit == "W":
         number, unit = number / 1000, "kW"
     text = _num(number)
     if unit in ("°F", "°C"):
@@ -188,6 +208,34 @@ def _wind_text(display: str, direction: dict | None, gust: dict | None) -> str:
     return f"{text} · gust {round(gust_value)}"
 
 
+def _number(state: Any) -> float | None:
+    try:
+        value = float(state)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(value) or math.isinf(value) else value
+
+
+def _icon_fields(entity: HAEntityConfig, state: Any, unit: str | None, flow: str | None) -> dict:
+    """Glyph, its colour tone, battery fill level and value/flow tones for the page."""
+    icon, icon_tone, level, value_tone = entity.icon, None, None, None
+    number = _number(state)
+    if entity.slot == "weather":
+        icon, icon_tone = WEATHER_GLYPHS.get(str(state), (None, None))
+    elif entity.icon == "battery" and unit == "%" and number is not None:
+        level = min(100.0, max(0.0, number))
+        icon_tone = "ok" if level >= BATTERY_OK else "low" if level >= BATTERY_LOW else "critical"
+    elif entity.icon == "sun" and number is not None and number > 0:
+        value_tone = "sun"  # producing
+    return {
+        "icon": icon,
+        "icon_tone": icon_tone,
+        "level": level,
+        "value_tone": value_tone,
+        "flow_tone": "in" if flow and flow.startswith("+") else None,  # discharging stays plain
+    }
+
+
 def _hilo(high: Any, low: Any) -> str | None:
     """'H 78°  L 51°' from today's forecast, leaving out missing parts (never 'L 0°')."""
     parts = []
@@ -232,6 +280,7 @@ def _shape(
         "display": display,
         "flow": flow,
         "detail": CONDITIONS.get(state, str(state or "")) if entity.slot == "weather" else "",
+        **_icon_fields(entity, state, unit, flow),
     }
 
 
@@ -270,7 +319,7 @@ class HACache:
             ha.url,
             ha.token,
             ha.timeout_seconds,
-            tuple((e.id, e.slot, e.label, e.flow, e.direction, e.gust) for e in ha.entities),
+            tuple((e.id, e.slot, e.label, e.flow, e.direction, e.gust, e.icon) for e in ha.entities),
         )
         with self._lock:
             if key != self._key:

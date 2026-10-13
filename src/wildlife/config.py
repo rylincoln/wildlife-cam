@@ -506,6 +506,9 @@ class HAEntityConfig(BaseModel):
     # compass point) and a gust speed, e.g. "1 mph NNE · gust 14". Allow-listed like ``id``.
     direction: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
     gust: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+    # Small line icon drawn before the label on the frame. A "battery" icon fills to
+    # the row's % value; a "sun" row's value turns sun-yellow while above zero.
+    icon: Literal["thermometer", "house", "sun", "bolt", "battery"] | None = None
 
 
 class HomeAssistantConfig(BaseModel):

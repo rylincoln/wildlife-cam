@@ -108,6 +108,14 @@ def test_conditions_slot_and_wind_companions() -> None:
             HAEntityConfig(id="sensor.station_wind_speed", slot="conditions", **{field: "sensor.x/../api"})
 
 
+def test_rows_can_name_an_icon_from_the_frame_set() -> None:
+    for icon in ("thermometer", "house", "sun", "bolt", "battery"):
+        assert HAEntityConfig(id="sensor.x", slot="energy", icon=icon).icon == icon
+    assert HAEntityConfig(id="sensor.x", slot="energy").icon is None
+    with pytest.raises(ValidationError):  # only icons the page knows how to draw
+        HAEntityConfig(id="sensor.x", slot="energy", icon="rocket")
+
+
 def test_ha_timeout_is_capped_below_the_page_poll_timeout() -> None:  # minor #9
     with pytest.raises(ValidationError):
         HomeAssistantConfig(timeout_seconds=6)

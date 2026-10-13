@@ -78,6 +78,7 @@ def test_snapshot_returns_allow_listed_items_with_filtered_attrs() -> None:
     assert snap["items"][0] == {
         "slot": "temps", "label": "Outside", "state": "68.4", "unit": "°F",
         "attrs": {}, "display": "68.4°", "flow": None, "detail": "",
+        "icon": None, "icon_tone": None, "level": None, "value_tone": None, "flow_tone": None,
     }
     weather = snap["items"][1]
     assert weather["attrs"] == {"temperature": 72, "temperature_unit": "°F", "humidity": 30}
@@ -128,6 +129,7 @@ def test_unknown_entity_does_not_break_the_strip() -> None:  # Review Focus 1
     assert snap["items"][1] == {
         "slot": "temps", "label": "Typo", "state": None, "unit": None,
         "attrs": {}, "display": "—", "flow": None, "detail": "",
+        "icon": None, "icon_tone": None, "level": None, "value_tone": None, "flow_tone": None,
     }
 
 
@@ -512,3 +514,66 @@ def test_changing_wind_companions_invalidates_cache() -> None:
     cache.snapshot(_ha(WIND), 15)
     moved = WIND.model_copy(update={"gust": "sensor.other_gust"})
     assert cache.snapshot(_ha(moved), 15)["items"][0]["display"] == "1 mph NNE · gust 30"
+
+
+# ---- design pass: icons, tones, battery level, whole watts ------------------
+
+def _one(state: str, unit: str | None, **entity) -> dict:
+    e = HAEntityConfig(id="sensor.thing", slot=entity.pop("slot", "energy"), label="Thing", **entity)
+    states = {"sensor.thing": {"entity_id": "sensor.thing", "state": state,
+                               "attributes": {"unit_of_measurement": unit} if unit else {}}}
+    return HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(e), 15)["items"][0]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [("574.3", "574 W"), ("-0.3", "0 W"), ("999.4", "999 W"), ("999.6", "1 kW"), ("1312", "1.3 kW")],
+)
+def test_watts_are_whole_numbers(state: str, expected: str) -> None:
+    assert display_value("energy", state, "W", {}) == expected
+
+
+@pytest.mark.parametrize(
+    ("soc", "level", "tone"),
+    [("75.3", 75.3, "ok"), ("50", 50.0, "ok"), ("29", 29.0, "low"), ("25", 25.0, "low"),
+     ("12.5", 12.5, "critical"), ("104", 100.0, "ok"), ("-3", 0.0, "critical"),
+     ("unavailable", None, None)],
+)
+def test_battery_icon_fills_to_the_charge_in_its_level_colour(soc: str, level, tone) -> None:
+    item = _one(soc, "%", icon="battery")
+    assert (item["icon"], item["level"], item["icon_tone"]) == ("battery", level, tone)
+
+
+@pytest.mark.parametrize(("watts", "tone"), [("672.4", "sun"), ("0", None), ("unknown", None)])
+def test_solar_value_is_sun_coloured_only_while_producing(watts: str, tone) -> None:
+    assert _one(watts, "W", icon="sun")["value_tone"] == tone
+
+
+def test_flow_tone_marks_charging_only() -> None:
+    states = _battery_states("12.0")
+    states["sensor.shop_shunt_power"]["attributes"]["unit_of_measurement"] = "A"
+    charging = HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(SOC), 15)["items"][0]
+    assert (charging["flow"], charging["flow_tone"]) == ("+12 A", "in")
+    states["sensor.shop_shunt_power"]["state"] = "-11.1"
+    discharging = HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(SOC), 15)["items"][0]
+    assert (discharging["flow"], discharging["flow_tone"]) == ("−11.1 A", None)  # normal at night
+
+
+def test_plain_rows_have_no_icon_or_tones() -> None:
+    item = _one("68.4", "°F", slot="temps")
+    assert {k: item[k] for k in ("icon", "icon_tone", "level", "value_tone", "flow_tone")} == {
+        "icon": None, "icon_tone": None, "level": None, "value_tone": None, "flow_tone": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("condition", "icon", "tone"),
+    [("rainy", "rain", "sky"), ("pouring", "rain", "sky"), ("sunny", "sun", "sun"),
+     ("clear-night", "moon", None), ("partlycloudy", "partly", "sun"), ("cloudy", "cloud", None),
+     ("lightning-rainy", "storm", "sky"), ("snowy", "snow", "sky"), ("fog", "fog", None),
+     ("windy", "wind", None), ("exceptional", None, None)],
+)
+def test_weather_row_gets_a_condition_glyph(condition: str, icon, tone) -> None:
+    states = {"weather.home": {**STATES["weather.home"], "state": condition}}
+    item = HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(WX), 15)["items"][0]
+    assert (item["icon"], item["icon_tone"]) == (icon, tone)

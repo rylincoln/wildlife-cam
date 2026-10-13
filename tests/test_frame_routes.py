@@ -365,7 +365,7 @@ def test_state_carries_battery_flow(tmp_path: Path, monkeypatch, at) -> None:
 
 def test_page_renders_battery_flow_inside_the_value(tmp_path: Path) -> None:
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
-    assert 'el("span", "flow", item.flow)' in body
+    assert 'el("span", "flow" + (item.flow_tone ? " tone-" + item.flow_tone : ""), item.flow)' in body
 
 
 def test_thumbnail_captions_stack_name_over_time_without_wrapping(tmp_path: Path) -> None:
@@ -395,5 +395,23 @@ def test_page_has_conditions_rows_under_the_rain(tmp_path: Path) -> None:
 def test_photos_that_fail_to_load_hide_instead_of_showing_a_broken_icon(tmp_path: Path) -> None:
     # A bird with no cached reference photo (/species_photo 404) showed Chrome's broken-image box.
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
-    assert 'function quietImg(img)' in body and 'img.style.visibility = "hidden"' in body
+    assert 'function quietImg(img, placeholder)' in body and 'img.style.visibility = "hidden"' in body
     assert body.count("quietImg(") >= 4  # definition + strip thumbs, sighting cells, bird rows
+
+
+def test_design_tokens_icons_and_night_overrides(tmp_path: Path) -> None:
+    css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
+    for token in ("--fg: #f2efe9", "--muted: #8e978a", "--sun: #f4c35a", "--juniper: #7dba7a",
+                  "--sand: #e39a4f", "--ember: #e0614a", "--sky: #86b7d9"):
+        assert token in css
+    # At night every accent turns red so the room stays dark-adapted.
+    night = css[css.index("#frame.night {"):]
+    night = night[: night.index("}")]
+    for var in ("--fg", "--muted", "--sun", "--juniper", "--sand", "--ember", "--sky", "--accent", "--warn"):
+        assert var + ":" in night  # incl. the yellow "reconnecting" / "server offline" badges
+    assert "font-variant-numeric: tabular-nums" in css
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert "function iconSvg(name, size)" in body and "createElementNS" in body
+    assert "innerHTML" not in body
+    assert "item.label === lastLabel" in body  # a place name shows once per group of rows
+    assert 'class="ph"' in body  # bird outline when the reference photo is missing

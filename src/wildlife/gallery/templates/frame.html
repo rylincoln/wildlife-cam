@@ -28,7 +28,7 @@
     <div class="clock">
       <div id="time"><span id="hm">--:--</span><span id="ampm"></span></div><div id="date"></div>
       <div id="sighting" class="sighting" hidden><img alt=""><div class="cap"></div></div>
-      <div id="bird" class="bird" hidden><img alt=""><div class="cap"></div></div>
+      <div id="bird" class="bird" hidden><img alt=""><span class="ph" hidden></span><div class="cap"></div></div>
     </div>
     <div class="mid">
       <div class="weather" id="weather"></div>
@@ -86,6 +86,60 @@
     return node;
   }
   function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+
+  // ---- icons --------------------------------------------------------------
+  // One family of 24px line icons in the text colour, built with DOM calls.
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var CLOUD_HIGH = "M7 15.5a4.5 4.5 0 1 1 1.2-8.8A5.5 5.5 0 0 1 18.6 9 3.3 3.3 0 0 1 17.5 15.5z";
+  var ICONS = {
+    thermometer: [["path", "M14 14.8V4.5a2 2 0 0 0-4 0v10.3a4 4 0 1 0 4 0z"], ["path", "M12 17.5v-6"]],
+    house: [["path", "M3.5 11.5 12 4l8.5 7.5"], ["path", "M6 9.8V20h12V9.8"], ["path", "M10 20v-5h4v5"]],
+    sun: [["circle", 12, 12, 4],
+          ["path", "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"]],
+    bolt: [["path", "M13 2.5 5 13.5h6l-1 8 8-11h-6l1-8z"]],
+    moon: [["path", "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"]],
+    cloud: [["path", "M7 18.5a4.5 4.5 0 1 1 1.2-8.8A5.5 5.5 0 0 1 18.6 12 3.3 3.3 0 0 1 17.5 18.5z"]],
+    partly: [["circle", 8, 8, 3], ["path", "M8 2.5v1.2M2.5 8h1.2M4.1 4.1l.9.9M11.9 4.1l-.9.9"],
+             ["path", "M9.5 20a3.8 3.8 0 1 1 1-7.4A4.6 4.6 0 0 1 19.3 14.6 2.8 2.8 0 0 1 18.4 20z"]],
+    rain: [["path", CLOUD_HIGH], ["path", "M8.5 18.5l-1 2.5M12.5 18.5l-1 2.5M16.5 18.5l-1 2.5"]],
+    storm: [["path", CLOUD_HIGH], ["path", "M12.5 16.5l-2 3h3l-2 3"]],
+    snow: [["path", CLOUD_HIGH], ["path", "M8 19h.01M12 19h.01M16 19h.01M10 22h.01M14 22h.01"]],
+    fog: [["path", "M4 9h16M3 13h18M5 17h14"]],
+    wind: [["path", "M3 8.5h10a2.5 2.5 0 1 0-2.5-2.5"], ["path", "M3 12.5h15a2.5 2.5 0 1 1-2.5 2.5"],
+           ["path", "M3 16.5h7"]],
+    bird: [["path", "M5 16c0-4 3-7 7-7 1.2-2 3.2-3 5-2.5L19.5 8 18 9c.3 3.8-2.3 7-6.5 7H5z"],
+           ["path", "M10 16v3M13.5 16v3"], ["path", "M15.5 8.2h.01"]]
+  };
+  function svgNode(tag, attrs) {
+    var node = document.createElementNS(SVG_NS, tag);
+    for (var key in attrs) { if (attrs.hasOwnProperty(key)) { node.setAttribute(key, attrs[key]); } }
+    return node;
+  }
+  function iconSvg(name, size) {
+    var svg = svgNode("svg", {
+      viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor",
+      "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round"
+    });
+    (ICONS[name] || []).forEach(function (part) {
+      svg.appendChild(part[0] === "circle"
+        ? svgNode("circle", { cx: part[1], cy: part[2], r: part[3] })
+        : svgNode("path", { d: part[1] }));
+    });
+    return svg;
+  }
+  // A battery that fills to the charge, coloured by level (ok / low / critical).
+  function batterySvg(level, tone) {
+    var svg = iconSvg("", 26);
+    svg.appendChild(svgNode("rect", { x: 2, y: 7.5, width: 18, height: 9, rx: 2 }));
+    svg.appendChild(svgNode("path", { d: "M21.5 10.5v3" }));
+    if (level !== null && level !== undefined) {
+      svg.appendChild(svgNode("rect", {
+        x: 4, y: 9.5, width: Math.max(1.5, 14 * level / 100), height: 5, rx: 0.8, stroke: "none",
+        "class": "fill" + (tone ? " tone-" + tone : "")
+      }));
+    }
+    return svg;
+  }
 
   // ---- camera streams ---------------------------------------------------
   function attach(tile) {
@@ -221,9 +275,16 @@
     // Only the HA values fade when stale; the clock keeps full brightness.
     weather.className = ha.stale ? "weather stale" : "weather";
     values.className = ha.stale ? "stale" : "";
+    var lastLabel = null;
     ha.items.forEach(function (item) {
       if (item.slot === "weather" && !weather.firstChild) {
-        weather.appendChild(el("div", "temp", item.display));
+        var temp = el("div", "temp", item.display);
+        if (item.icon) {   // condition glyph beside the temperature
+          var wx = el("span", "wx" + (item.icon_tone ? " tone-" + item.icon_tone : ""));
+          wx.appendChild(iconSvg(item.icon, 64));
+          temp.appendChild(wx);
+        }
+        weather.appendChild(temp);
         weather.appendChild(el("div", "cond", item.detail));
         if (ha.forecast && ha.forecast.display) {   // formatted server-side; never "L 0°"
           weather.appendChild(el("div", "hilo", ha.forecast.display));
@@ -231,10 +292,20 @@
         return;
       }
       var row = el("div", "row");
-      row.appendChild(el("span", "label", item.label));
-      var value = el("span", "value", item.display);
+      var label = el("span", "label");
+      if (item.icon) {
+        var ico = el("span", "ico");
+        ico.appendChild(item.icon === "battery" ? batterySvg(item.level, item.icon_tone) : iconSvg(item.icon, 26));
+        label.appendChild(ico);
+      }
+      var grouped = item.slot !== "rain" && item.slot !== "conditions";
+      // A place name shows once per run of rows that share it; the icons say what each row is.
+      label.appendChild(document.createTextNode(grouped && item.label === lastLabel ? "" : item.label));
+      if (grouped) { lastLabel = item.label; }
+      row.appendChild(label);
+      var value = el("span", "value" + (item.value_tone ? " tone-" + item.value_tone : ""), item.display);
       if (item.flow) {   // battery in/out, signed server-side: "+1.3 A" charging, "−6.6 A" discharging
-        value.appendChild(el("span", "flow", item.flow));
+        value.appendChild(el("span", "flow" + (item.flow_tone ? " tone-" + item.flow_tone : ""), item.flow));
       }
       row.appendChild(value);
       if (item.slot === "rain") { rain.appendChild(row); }
@@ -292,14 +363,25 @@
 
   // A photo that fails to load (e.g. a bird with no cached reference photo) leaves
   // an empty space instead of Chrome's broken-image box; the layout stays put.
-  function quietImg(img) {
-    img.onerror = function () { img.style.visibility = "hidden"; };
-    img.onload = function () { img.style.visibility = ""; };
+  // With a placeholder (the bird's outline) the placeholder stands in for a missing photo.
+  function quietImg(img, placeholder) {
+    img.onerror = function () {
+      img.style.visibility = "hidden";
+      if (placeholder) { img.hidden = true; placeholder.hidden = false; }
+    };
+    img.onload = function () {
+      img.style.visibility = "";
+      if (placeholder) { placeholder.hidden = true; }
+    };
     return img;
   }
+  var birdPlaceholder = document.querySelector("#bird .ph");
+  birdPlaceholder.appendChild(iconSvg("bird", 40));
   function showThumb(box, url, label, time) {
-    var img = quietImg(box.querySelector("img"));
+    var placeholder = box.querySelector(".ph");
+    var img = quietImg(box.querySelector("img"), placeholder);
     if (url) { img.src = url; img.hidden = false; } else { img.hidden = true; }
+    if (placeholder) { placeholder.hidden = !!url; }
     var cap = box.querySelector(".cap");   // name over time, each one line (never wraps mid-time)
     clear(cap);
     cap.appendChild(el("div", "cap-name", label));
