@@ -7,7 +7,8 @@ production) that:
 2. Loads the YOLO model **once** onto the inference device (MPS / CPU).
 3. Opens the SQLite store (creating the schema if needed).
 4. Starts one :class:`~wildlife.events.base.EventSource` per camera, each running
-   in its own daemon thread and feeding a shared :class:`queue.Queue`.
+   in its own daemon thread and feeding a shared
+   :class:`~wildlife.event_mailbox.EventMailbox` (newest event per camera).
 5. Runs a **single** consumer loop that, for every event, applies the resource
    guard (``detect_every_nth_event``), the :class:`~wildlife.gate.Deduper`
    (cooldown + burst cap), grabs an RTSP frame burst, runs inference on each
@@ -29,7 +30,6 @@ light, hardware-free library modules.
 from __future__ import annotations
 
 import logging
-import queue
 import signal
 import sys
 import threading
@@ -40,6 +40,7 @@ from wildlife.audio import AudioAnalyzer
 from wildlife.capture import grab_burst, is_corrupt_frame
 from wildlife.config import CameraConfig, Config, load_config
 from wildlife.detect import Detector
+from wildlife.event_mailbox import EventMailbox
 from wildlife.events.audio_detection import AudioDetectionSource
 from wildlife.events.base import EventSource, make_event_source
 from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
@@ -53,11 +54,6 @@ __all__ = ["run", "main"]
 
 logger = logging.getLogger(__name__)
 
-# Upper bound on queued, undelivered events. If the consumer ever falls far
-# behind (e.g. a storm of motion events during a GPU-contended moment), we drop
-# the newest events rather than let memory grow unbounded -- staying lean is a
-# hard requirement on the shared 8GB host.
-_QUEUE_MAXSIZE = 256
 # Reconnect backoff bounds for a flapping event source.
 _INITIAL_BACKOFF_S = 1.0
 _MAX_BACKOFF_S = 30.0
@@ -226,7 +222,9 @@ class _Worker:
         # camera_id -> CameraConfig, so the consumer can grab the right stream.
         self._cameras: dict[str, CameraConfig] = {c.id: c for c in config.cameras}
 
-        self._queue: "queue.Queue[CameraEvent]" = queue.Queue(maxsize=_QUEUE_MAXSIZE)
+        # At most one pending event per camera, newest wins: a burst taken long
+        # after its event shows an empty scene (see wildlife.event_mailbox).
+        self._queue = EventMailbox()
         self._shutdown = threading.Event()
 
         # Built in _setup() (kept None until then so failures surface early).
@@ -441,16 +439,8 @@ class _Worker:
         logger.info("Worker stopped.")
 
     def _drain_queue(self) -> int:
-        """Empty the queue without further network work; return count discarded."""
-        drained = 0
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-            self._queue.task_done()
-            drained += 1
-        return drained
+        """Empty the inbox without further network work; return count discarded."""
+        return self._queue.clear()
 
     # -- producer side -----------------------------------------------------
 
@@ -505,23 +495,15 @@ class _Worker:
         logger.info("Camera %s: producer thread exiting.", camera.id)
 
     def _enqueue(self, camera: CameraConfig, event: CameraEvent) -> None:
-        """Put one event on the queue, dropping it if the queue is saturated."""
-        try:
-            self._queue.put_nowait(event)
-        except queue.Full:
-            logger.warning(
-                "Camera %s: event queue full (%d); dropping event ts=%s.",
-                camera.id,
-                _QUEUE_MAXSIZE,
-                getattr(event, "event_ts", "?"),
-            )
-            return
+        """Make ``event`` its camera's pending event (replacing an older one still waiting)."""
+        replaced = self._queue.put(event)
         logger.info(
-            "Camera %s: event received (kind=%s, ts=%s) -> queued (depth=%d).",
+            "Camera %s: event received (kind=%s, ts=%s) -> %s (pending cameras=%d).",
             event.camera_id,
             event.kind,
             event.event_ts,
-            self._queue.qsize(),
+            "replaced an older pending event" if replaced is not None else "queued",
+            len(self._queue),
         )
 
     # -- consumer side -----------------------------------------------------
@@ -533,9 +515,8 @@ class _Worker:
         flag between events. Remaining queued events are discarded in teardown.
         """
         while not self._shutdown.is_set():
-            try:
-                event = self._queue.get(timeout=_QUEUE_GET_TIMEOUT_S)
-            except queue.Empty:
+            event = self._queue.get(timeout=_QUEUE_GET_TIMEOUT_S)
+            if event is None:
                 continue
             try:
                 self._handle_event(event)
@@ -544,8 +525,6 @@ class _Worker:
                     "Unhandled error processing event from camera %s.",
                     getattr(event, "camera_id", "?"),
                 )
-            finally:
-                self._queue.task_done()
 
     def _megadetector_pass(
         self,
