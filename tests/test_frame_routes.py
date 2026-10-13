@@ -376,3 +376,11 @@ def test_thumbnail_captions_stack_name_over_time_without_wrapping(tmp_path: Path
     css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
     assert ".cap-name, .cap-time { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }" in css
     assert "#frame.night .cap-time" in css
+
+
+def test_bird_sits_under_the_camera_sighting_leaving_the_weather_column_free(tmp_path: Path) -> None:
+    # Owner request: the latest bird moves to the clock column under the latest camera sighting,
+    # so the weather column has room for more data.
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    clock, mid = body.index('<div class="clock">'), body.index('<div class="mid">')
+    assert clock < body.index('id="sighting"') < body.index('id="bird"') < mid

@@ -65,10 +65,10 @@ figcaption {
 #full { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; }
 #full figcaption { font-size: 28px; }
 
-/* Wildlife: latest camera sighting under the clock, latest bird under the weather. */
+/* Wildlife: latest camera sighting, then latest bird, under the clock (the weather column stays free). */
 .sighting, .bird { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
 .sighting img { width: 160px; height: 90px; object-fit: cover; border-radius: 6px; background: #111; }
-.bird img { width: 72px; height: 72px; object-fit: cover; border-radius: 36px; background: #111; }
+.bird img { width: 72px; height: 72px; margin: 0 44px; object-fit: cover; border-radius: 36px; background: #111; }  /* centred in the 160px thumb width so captions line up */
 .cap { flex: 1; min-width: 0; font-size: 22px; color: var(--muted); }
 .cap-name, .cap-time { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cap-time { margin-top: 2px; font-size: 20px; color: var(--muted); }
