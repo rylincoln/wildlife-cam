@@ -284,22 +284,25 @@
   var latestSightings = [];
   var playingButton = null;
 
-  function showThumb(box, url, text) {
+  function showThumb(box, url, label, time) {
     var img = box.querySelector("img");
     if (url) { img.src = url; img.hidden = false; } else { img.hidden = true; }
-    box.querySelector(".cap").textContent = text;
+    var cap = box.querySelector(".cap");   // name over time, each one line (never wraps mid-time)
+    clear(cap);
+    cap.appendChild(el("div", "cap-name", label));
+    cap.appendChild(el("div", "cap-time", time));
     box.hidden = false;
   }
   function renderWildlife(w) {
     var sighting = document.getElementById("sighting");
     var bird = document.getElementById("bird");
     if (w.sighting) {
-      showThumb(sighting, w.sighting.thumb_url, w.sighting.label + " \u00b7 " + w.sighting.time);
+      showThumb(sighting, w.sighting.thumb_url, w.sighting.label, w.sighting.time);
     } else { sighting.hidden = true; }
     latestSightings = w.sightings || [];
     latestBirds = w.birds || [];
     if (latestBirds.length) {
-      showThumb(bird, latestBirds[0].photo_url, latestBirds[0].label + " \u00b7 " + latestBirds[0].time);
+      showThumb(bird, latestBirds[0].photo_url, latestBirds[0].label, latestBirds[0].time);
     } else { bird.hidden = true; }
   }
   function pollWildlife() {

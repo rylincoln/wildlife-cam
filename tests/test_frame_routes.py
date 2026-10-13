@@ -366,3 +366,13 @@ def test_state_carries_battery_flow(tmp_path: Path, monkeypatch, at) -> None:
 def test_page_renders_battery_flow_inside_the_value(tmp_path: Path) -> None:
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
     assert 'el("span", "flow", item.flow)' in body
+
+
+def test_thumbnail_captions_stack_name_over_time_without_wrapping(tmp_path: Path) -> None:
+    # Owner request: "Person · Oct 9, 4:50 PM" wrapped mid-time next to the thumbnail. The name
+    # and time are now two single-line, ellipsized rows, and the time row goes red at night.
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'el("div", "cap-name", label)' in body and 'el("div", "cap-time", time)' in body
+    css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
+    assert ".cap-name, .cap-time { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }" in css
+    assert "#frame.night .cap-time" in css
