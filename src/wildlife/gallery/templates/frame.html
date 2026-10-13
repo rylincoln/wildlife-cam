@@ -43,6 +43,11 @@
     <header><span>Recent birds</span><button id="birds-close" type="button">✕</button></header>
     <ul id="bird-list"></ul>
   </section>
+  <section id="sightings" hidden>
+    <header><span>Recent sightings</span><button id="sightings-close" type="button">✕</button></header>
+    <ul id="sighting-list"></ul>
+    <figure id="sighting-view" hidden><img alt=""><figcaption></figcaption></figure>
+  </section>
   <audio id="player" preload="none"></audio>
 </main>
 <script>
@@ -119,7 +124,7 @@
     img.removeAttribute("src");   // aborts the MJPEG download
   }
   function attachAll() { tiles.forEach(attach); }
-  function streamsWanted() { return full.hidden && birdsPanel.hidden; }
+  function streamsWanted() { return full.hidden && birdsPanel.hidden && sightingsPanel.hidden; }
 
   function loadFull() {
     clearTimeout(fullRetry);
@@ -265,13 +270,18 @@
     xhr.send();
   }
 
-  // ---- wildlife sighting + birds ------------------------------------------
+  // ---- wildlife sightings + birds -----------------------------------------
   var WILDLIFE_MS = 60 * 1000;
   var BIRDS_IDLE_MS = 60 * 1000;
+  var SIGHTINGS_IDLE_MS = 60 * 1000;
   var birdsPanel = document.getElementById("birds");
+  var sightingsPanel = document.getElementById("sightings");
+  var sightingView = document.getElementById("sighting-view");
   var player = document.getElementById("player");
   var birdsTimer = null;
+  var sightingsTimer = null;
   var latestBirds = [];
+  var latestSightings = [];
   var playingButton = null;
 
   function showThumb(box, url, text) {
@@ -286,6 +296,7 @@
     if (w.sighting) {
       showThumb(sighting, w.sighting.thumb_url, w.sighting.label + " \u00b7 " + w.sighting.time);
     } else { sighting.hidden = true; }
+    latestSightings = w.sightings || [];
     latestBirds = w.birds || [];
     if (latestBirds.length) {
       showThumb(bird, latestBirds[0].photo_url, latestBirds[0].label + " \u00b7 " + latestBirds[0].time);
@@ -355,6 +366,59 @@
     if (full.hidden) { attachAll(); }
   }
   document.getElementById("bird").addEventListener("click", handleTap(openBirds));
+
+  // Recent sightings: a grid of the latest camera events; tap one to see the photo big.
+  function sightingText(s) { return s.label + " \u00b7 " + s.camera + " \u00b7 " + s.time; }
+  function showSighting(s) {
+    sightingView.querySelector("img").src = s.image_url || s.thumb_url;
+    sightingView.querySelector("figcaption").textContent = sightingText(s);
+    sightingView.hidden = false;
+  }
+  function hideSighting() {
+    sightingView.hidden = true;
+    sightingView.querySelector("img").removeAttribute("src");   // drop the full-size photo
+  }
+  function renderSightingList() {
+    var list = document.getElementById("sighting-list");
+    clear(list);
+    latestSightings.forEach(function (s) {
+      var cell = el("li", "sighting-cell");
+      var img = el("img");
+      img.alt = "";
+      if (s.thumb_url) { img.src = s.thumb_url; }
+      cell.appendChild(img);
+      cell.appendChild(el("div", "sighting-name", s.label));
+      cell.appendChild(el("div", "sighting-meta", s.camera + " \u00b7 " + s.time));
+      cell.addEventListener("click", function (ev) { ev.stopPropagation(); bumpSightings(); showSighting(s); });
+      list.appendChild(cell);
+    });
+  }
+  function bumpSightings() {
+    clearTimeout(sightingsTimer);
+    sightingsTimer = setTimeout(closeSightings, SIGHTINGS_IDLE_MS);
+  }
+  function openSightings() {
+    if (!latestSightings.length) { return; }
+    tiles.forEach(detach);
+    renderSightingList();
+    hideSighting();
+    sightingsPanel.hidden = false;
+    bumpSightings();
+  }
+  function closeSightings() {
+    clearTimeout(sightingsTimer);
+    hideSighting();
+    clear(document.getElementById("sighting-list"));
+    sightingsPanel.hidden = true;
+    if (streamsWanted()) { attachAll(); }
+  }
+  document.getElementById("sighting").addEventListener("click", handleTap(openSightings));
+  document.getElementById("sightings-close").addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    closeSightings();
+  });
+  sightingView.addEventListener("click", function (ev) { ev.stopPropagation(); bumpSightings(); hideSighting(); });
+  sightingsPanel.addEventListener("click", bumpSightings);
   document.getElementById("birds-close").addEventListener("click", function (ev) {
     ev.stopPropagation();
     closeBirds();

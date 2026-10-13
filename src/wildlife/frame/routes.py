@@ -3,7 +3,7 @@
 * ``GET /frame``       -- the 1280x800 dashboard (two MJPEG tiles + HA strip).
 * ``GET /frame/state`` -- server time, night-dim state and the allow-listed HA
   snapshot; also records the polling client so ``/frame/info`` can report it.
-* ``GET /frame/wildlife`` -- newest camera sighting + recent distinct bird IDs.
+* ``GET /frame/wildlife`` -- recent camera sightings + recent distinct bird IDs.
 * ``GET /frame/info``  -- plain-text last poller (IP, time, user agent) to find the
   frame on the LAN (its Wi-Fi MAC/IP change on every boot).
 
@@ -30,6 +30,9 @@ __all__ = ["create_frame_blueprint"]
 logger = logging.getLogger(__name__)
 
 BIRD_SCAN = 60  # recent audio rows scanned for up to 12 distinct species
+# Recent camera rows scanned per provenance for up to 12 events: a burst event can
+# save up to burst_frames rows (more with several objects).
+SIGHTING_SCAN = 150
 _NO_HA = {"ok": False, "stale": True, "age_seconds": None, "items": [], "forecast": None}
 
 
@@ -126,10 +129,10 @@ def create_frame_blueprint(
     @bp.route("/frame/wildlife")
     def frame_wildlife():
         _enabled_config()
-        data: dict = {"sighting": None, "birds": []}
+        data: dict = {"sighting": None, "sightings": [], "birds": []}
         if recent_captures is not None:
             try:
-                cameras = [c for kind in CAMERA_KINDS for c in recent_captures(kind, 1)]
+                cameras = [c for kind in CAMERA_KINDS for c in recent_captures(kind, SIGHTING_SCAN)]
                 data = build_wildlife(cameras, recent_captures("audio", BIRD_SCAN), _now())
             except Exception:  # the panel is a nicety; never break the page over it
                 logger.exception("Wildlife lookup failed")

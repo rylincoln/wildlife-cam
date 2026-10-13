@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# install_review_agent.sh — install the daily Claude-vision review job as a
-# LaunchAgent for the current user (no sudo).
+# install_review_agent.sh — install the Claude-vision review job (every 15
+# minutes) as a LaunchAgent for the current user (no sudo).
 #
 # Unlike the detector/gallery/stream daemons (install_launchd.sh, root), the
 # review runs in the user's login session so the `claude` CLI can read its
@@ -40,6 +40,6 @@ plutil -lint "$DST" >/dev/null
 launchctl bootstrap "$DOMAIN" "$DST"
 launchctl enable "$DOMAIN/$LABEL"
 
-echo "Installed $LABEL (daily 09:00; a no-op until review.enabled is true)."
+echo "Installed $LABEL (every 15 minutes; a no-op until review.enabled is true)."
 echo "Run now:  launchctl kickstart $DOMAIN/$LABEL"
 echo "Logs:     $HOME/wildlife/logs/review.{out,err}.log"

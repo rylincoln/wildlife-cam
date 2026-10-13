@@ -577,7 +577,7 @@ sudo pmset -a sleep 0
 
 (A media-server appliance likely already has this set.)
 
-### Daily false-positive review (optional)
+### Claude review of detections (optional)
 
 At night both on-device models call moths at the IR illuminator animals, often
 at >0.9 confidence. `wildlife-review` shows each saved detection to Claude (the
@@ -585,7 +585,10 @@ full frame with the box drawn, plus a close-up) and deletes the ones it judges
 confidently not to be an animal (`review.delete_min_confidence`). Overlapping
 boxes in one burst share a request. Captures you reviewed or reclassified in
 `/admin` are never deleted, and every verdict is kept in a `review_log` table
-after the image is gone.
+after the image is gone. A confirmed animal is relabelled to the species the
+reviewer names (`review.relabel`): the detector mislabels often, and has no class
+for dogs. While the review is enabled, the `/frame` kiosk shows only
+reviewer-confirmed sightings.
 
 The default `review.backend: claude_cli` runs the Claude Code CLI (`claude -p`)
 on its own login, so a Claude subscription covers it and no API key is needed.
@@ -602,8 +605,8 @@ wildlife-review apply                      # delete what the dry runs flagged
 wildlife-review report                     # verdicts and actions so far
 ```
 
-The daily 09:00 run is a per-user **LaunchAgent**, not a daemon, so the CLI can
-read its login from your keychain. Install it without sudo using
+The scheduled run, every 15 minutes, is a per-user **LaunchAgent**, not a daemon,
+so the CLI can read its login from your keychain. Install it without sudo using
 `bash scripts/install_review_agent.sh`, then set `review.enabled: true`.
 
 ---

@@ -477,8 +477,17 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
     # Frame kiosk (LAN-only; see wildlife.frame.routes)
     # ----------------------------------------------------------------------- #
     def _recent_captures(source_kind: str, limit: int) -> list[dict]:
-        """Newest-first serialized captures of one provenance, for the frame panel."""
-        rows = get_store().query(source_kind=source_kind, limit=limit)
+        """Newest-first serialized captures of one provenance, for the frame panel.
+
+        While the Claude review runs (``review.enabled``) camera captures are limited
+        to reviewer-confirmed animals and people, so the wall display never shows a
+        moth at the illuminator; a new sighting appears once the next review passes.
+        """
+        store = get_store()
+        if source_kind != "audio" and get_config().review.enabled:
+            rows = store.query_confirmed(source_kind=source_kind, limit=limit)
+        else:
+            rows = store.query(source_kind=source_kind, limit=limit)
         return [_serialize(r) for r in rows]
 
     from wildlife.frame.routes import create_frame_blueprint

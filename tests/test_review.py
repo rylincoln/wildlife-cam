@@ -26,6 +26,8 @@ from wildlife.review import (
     cluster_candidates,
     decide_action,
     output_schema,
+    relabel_target,
+    review_species,
     run_review,
 )
 from wildlife.store import Store
@@ -167,7 +169,8 @@ def test_request_shape(world):
     assert kw["model"] == "claude-opus-5-5"
     assert kw["fallbacks"] == "default" and kw["betas"] == ["server-side-fallback-2026-07-01"]
     assert kw["output_config"]["effort"] == "low"
-    assert kw["output_config"]["format"]["schema"] == output_schema(SPECIES)
+    assert kw["output_config"]["format"]["schema"] == output_schema(review_species(cfg))
+    assert "dog" in kw["output_config"]["format"]["schema"]["properties"]["species"]["enum"]
     images = [b for b in kw["messages"][0]["content"] if b["type"] == "image"]
     assert len(images) == 2 and all(b["source"]["media_type"] == "image/jpeg" for b in images)
     assert "red_fox" in kw["system"]
@@ -308,7 +311,7 @@ def test_cli_backend_runs_review_on_the_cli_login(cli_world, monkeypatch, tmp_pa
     opt = {cmd[i]: cmd[i + 1] for i in range(len(cmd) - 1) if cmd[i].startswith("--")}
     assert opt["--model"] == "claude-opus-5-5" and opt["--effort"] == "low"
     assert opt["--tools"] == "" and opt["--input-format"] == "stream-json"
-    assert json.loads(opt["--json-schema"]) == output_schema(SPECIES)
+    assert json.loads(opt["--json-schema"]) == output_schema(review_species(cfg))
     assert "red_fox" in opt["--system-prompt"]
     images = [b for b in json.loads(call["input"])["message"]["content"] if b["type"] == "image"]
     assert len(images) == 2
@@ -362,3 +365,64 @@ def test_resolve_claude_bin(tmp_path, monkeypatch):
     assert resolve_claude_bin("claude") == str(exe)
     with pytest.raises(AuthError):
         resolve_claude_bin("no-such-claude-binary")
+
+
+def _labels(cfg) -> dict[int, str]:
+    conn = sqlite3.connect(cfg.storage.db_path)
+    try:
+        return dict(conn.execute("SELECT id, label FROM captures"))
+    finally:
+        conn.close()
+
+
+def _animal(species, confidence=0.95):
+    body = {"reason": "t", "verdict": "animal", "confidence": confidence, "species": species,
+            "artifact": "none"}
+    return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(body))],
+                           usage=SimpleNamespace(input_tokens=100, output_tokens=20))
+
+
+def test_confirmed_animals_take_the_reviewers_species_but_human_labels_stay(world):
+    cfg, ids, client = world
+    times = list(client.by_time)  # insect, fox, human, unsure -- in that order
+    client.by_time[times[1]] = _animal("dog")
+    client.by_time[times[2]] = _animal("coyote")  # the human-reclassified capture
+
+    run_review(cfg, dry_run=True, limit=None, since=None, client=client)
+    assert _labels(cfg)[ids["fox"][0]] == "red_fox"  # a dry run changes nothing
+
+    conn = sqlite3.connect(cfg.storage.db_path)
+    conn.execute("DELETE FROM review_log")
+    conn.commit()
+    conn.close()
+    summary = run_review(cfg, dry_run=False, limit=None, since=None, client=client)
+    labels = _labels(cfg)
+    assert labels[ids["fox"][0]] == "dog"
+    assert labels[ids["human"][0]] == "red_fox"  # a person's label wins
+    assert summary.relabelled == 1
+    conn = sqlite3.connect(cfg.storage.db_path)
+    row = conn.execute("SELECT original_label, reviewed FROM captures WHERE id=?", (ids["fox"][0],)).fetchone()
+    log_label = conn.execute("SELECT label FROM review_log WHERE capture_id=?", (ids["fox"][0],)).fetchone()
+    conn.close()
+    assert row == (None, 0)  # a machine relabel is not a human review
+    assert log_label == ("red_fox",)  # the detector's label is kept in the log
+
+
+def test_relabel_target():
+    from wildlife.review import Verdict
+
+    def v(verdict, species, conf=0.95):
+        return Verdict(reason="r", verdict=verdict, species=species, artifact="none", confidence=conf)
+
+    cl = Cluster([_cand(1, "T", (0, 0, 1, 1), 0.5), _cand(2, "T", (0, 0, 1, 1), 0.4, human=True)])
+    assert relabel_target(cl, v("animal", "coyote")) == ("coyote", [1])
+    assert relabel_target(cl, v("person", "none")) == ("person", [1])
+    assert relabel_target(cl, v("animal", "red_fox")) is None  # already that label
+    assert relabel_target(cl, v("animal", "other_animal")) is None
+    assert relabel_target(cl, v("animal", "coyote", conf=0.6)) is None
+    assert relabel_target(cl, v("not_animal", "none")) is None
+
+
+def test_review_species_adds_domestic_animals_once(tmp_path):
+    cfg = _config(tmp_path, extra_species=["dog", "red_fox"])
+    assert review_species(cfg) == [*SPECIES, "dog"]

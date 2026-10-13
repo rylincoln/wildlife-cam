@@ -524,13 +524,17 @@ class HomeAssistantConfig(BaseModel):
 
 
 class ReviewConfig(BaseModel):
-    """Daily Claude-vision review of saved camera captures (``wildlife-review``).
+    """Claude-vision review of saved camera captures (``wildlife-review``; the
+    LaunchAgent runs it every 15 minutes).
 
     Each saved detection is shown to Claude (full frame with the box drawn, plus
     a close-up); captures it judges ``not_animal`` with at least
-    ``delete_min_confidence`` are deleted. Captures a human reviewed or
-    reclassified are never deleted. Verdicts are kept in the ``review_log`` table
-    after the images are gone, as ground truth for ``wildlife-replay``.
+    ``delete_min_confidence`` are deleted, and with ``relabel`` a confirmed
+    animal's label becomes the species the reviewer names (the detector's label
+    stays in ``review_log``). Captures a human reviewed or reclassified are never
+    deleted or relabelled. Verdicts are kept in the ``review_log`` table after the
+    images are gone, as ground truth for ``wildlife-replay``. While enabled, the
+    /frame kiosk shows only reviewer-confirmed sightings.
 
     Backends:
 
@@ -550,6 +554,14 @@ class ReviewConfig(BaseModel):
     # Deleting a real animal is far worse than keeping a moth, so only a
     # confident not_animal verdict deletes; "unsure" and low-confidence calls keep.
     delete_min_confidence: float = Field(default=0.85, ge=0.5, le=1.0)
+    # Replace a confirmed capture's label with the species the reviewer names (at
+    # >= 0.8 reviewer confidence). The detector's labels are often wrong: coyotes
+    # come out as pronghorn, and it has no class for the dogs that make up much
+    # of the animal traffic.
+    relabel: bool = True
+    # Species the reviewer may name beyond detection.animal_classes: domestic
+    # animals the detector was never trained on.
+    extra_species: list[str] = Field(default_factory=lambda: ["dog", "cat", "horse", "cattle"])
     # Cost/time bound per run, in requests (one per box cluster per burst event).
     max_per_run: int = Field(default=300, ge=1)
     concurrency: int = Field(default=4, ge=1, le=16)

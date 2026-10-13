@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ===========================================================================
-  Wildlife Detection - daily Claude-vision review LaunchAgent
+  Wildlife Detection - Claude-vision review LaunchAgent (every 15 minutes)
   ===========================================================================
 
-  Runs `wildlife-review run` (scheduled mode) once a day at 09:00, after the night's
-  captures: every saved detection not yet reviewed is shown to Claude, and the
-  ones it confidently judges not to be an animal (moths at the IR illuminator,
-  rain streaks, flare...) are deleted. A no-op while review.enabled is false.
+  Runs `wildlife-review run` (scheduled mode) every 15 minutes: every saved
+  detection not yet reviewed is shown to Claude; the ones it confidently judges
+  not to be an animal (moths at the IR illuminator, rain streaks, flare...) are
+  deleted, and confirmed animals get the species it names. The /frame kiosk only
+  shows confirmed sightings, so this cadence is how late a new one appears. Most
+  runs find nothing new and exit at once. A no-op while review.enabled is false.
 
   A per-user LaunchAgent, not a LaunchDaemon like the others: the default
   review.backend (claude_cli) runs the `claude` CLI on its own login, which lives
   in this user's login keychain, reachable from their login session. If the Mac
-  is at the login window at 09:00 the run is skipped; the next one catches up.
+  is at the login window, runs wait until someone logs in; nothing is lost.
 
   Install (no sudo; leaves the detector/stream alone):
     bash scripts/install_review_agent.sh
@@ -38,14 +40,9 @@
     <key>WorkingDirectory</key>
     <string>/Users/__USER__/repos/wildlife-cam</string>
 
-    <!-- Daily at 09:00 local. One-shot: no RunAtLoad / KeepAlive. -->
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>9</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <!-- Every 15 minutes. One-shot per run: no KeepAlive. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
 
     <key>ProcessType</key>
     <string>Background</string>

@@ -1,8 +1,9 @@
 """Latest camera sighting + recent bird IDs for the /frame kiosk.
 
 Pure shaping over capture dicts as produced by the gallery's serializer (newest
-first, the order :meth:`wildlife.store.Store.query` returns): picks the newest
-camera capture, de-duplicates bird detections by species (keeping each species'
+first, the order :meth:`wildlife.store.Store.query` returns): collapses camera
+captures to one per burst event (its most confident frame; a burst can save
+several), de-duplicates bird detections by species (keeping each species'
 newest clip), and formats labels, times and confidences for display so the page
 JS only places text.
 """
@@ -51,21 +52,49 @@ def _confidence(value: object) -> str:
         return ""
 
 
+def _events(camera_caps: list[dict]) -> list[dict]:
+    """One capture per burst event (camera + event time), newest event first.
+
+    Each event is represented by its most confident frame: the best photo of it.
+    """
+    best: dict[tuple, dict] = {}
+    latest: dict[tuple, str] = {}
+    for cap in camera_caps:
+        ts = cap.get("capture_ts")
+        if not isinstance(ts, str):
+            continue
+        key = (cap.get("camera_id"), cap.get("event_ts") or ts)
+        latest[key] = max(latest.get(key, ""), ts)
+        held = best.get(key)
+        if held is None or (cap.get("confidence") or 0.0) > (held.get("confidence") or 0.0):
+            best[key] = cap
+    return [best[k] for k in sorted(best, key=lambda k: latest[k], reverse=True)]
+
+
+def _sighting(cap: dict, now: datetime) -> dict:
+    return {
+        "label": pretty_label(cap.get("label")),
+        "camera": (cap.get("camera_id") or "").replace("_", " "),
+        "time": time_text(cap["capture_ts"], now),
+        "confidence": _confidence(cap.get("confidence")),
+        "thumb_url": cap.get("thumb_url"),
+        "image_url": cap.get("image_url"),
+    }
+
+
 def build_wildlife(
-    camera_caps: list[dict], bird_caps: list[dict], now: datetime, max_birds: int = 12
+    camera_caps: list[dict],
+    bird_caps: list[dict],
+    now: datetime,
+    max_birds: int = 12,
+    max_sightings: int = 12,
 ) -> dict:
-    """Shape ``{"sighting": {...} | None, "birds": [...]}`` for ``/frame/wildlife``."""
-    sighting = None
-    dated = [c for c in camera_caps if isinstance(c.get("capture_ts"), str)]
-    if dated:
-        newest = max(dated, key=lambda c: c["capture_ts"])
-        sighting = {
-            "label": pretty_label(newest.get("label")),
-            "camera": (newest.get("camera_id") or "").replace("_", " "),
-            "time": time_text(newest["capture_ts"], now),
-            "thumb_url": newest.get("thumb_url"),
-            "image_url": newest.get("image_url"),
-        }
+    """Shape ``{"sighting", "sightings", "birds"}`` for ``/frame/wildlife``.
+
+    ``sighting`` is the newest event (the strip thumbnail, or None); ``sightings``
+    lists up to ``max_sightings`` recent events for the panel it opens.
+    """
+    sightings = [_sighting(c, now) for c in _events(camera_caps)[:max_sightings]]
     birds: list[dict] = []
     seen: set[str] = set()
     for cap in bird_caps:
@@ -84,4 +113,4 @@ def build_wildlife(
         )
         if len(birds) >= max_birds:
             break
-    return {"sighting": sighting, "birds": birds}
+    return {"sighting": sightings[0] if sightings else None, "sightings": sightings, "birds": birds}

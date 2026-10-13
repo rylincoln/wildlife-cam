@@ -71,22 +71,34 @@ figcaption {
 .bird img { width: 72px; height: 72px; object-fit: cover; border-radius: 36px; background: #111; }
 .cap { font-size: 22px; color: var(--muted); }
 .bird .cap { color: var(--fg); }
-#birds { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; padding: 20px 36px; }
-#birds header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; font-size: 32px; }
-#birds-close, .play { width: 56px; height: 56px; border: 0; border-radius: 28px; background: #222; color: var(--fg); font-size: 24px; }
+#birds, #sightings { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; padding: 20px 36px; }
+#birds header, #sightings header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; font-size: 32px; }
+#birds-close, #sightings-close, .play { width: 56px; height: 56px; border: 0; border-radius: 28px; background: #222; color: var(--fg); font-size: 24px; }
 #bird-list { display: flex; flex-wrap: wrap; gap: 8px 24px; list-style: none; }
 .bird-row { display: flex; align-items: center; gap: 16px; width: 580px; padding: 4px 0; }
 .bird-row img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; background: #111; }
 .bird-text { flex: 1; }
 .bird-name { font-size: 28px; }
 .bird-meta { font-size: 20px; color: var(--muted); }
+/* Recent sightings: 4 x 3 grid of 16:9 thumbnails (4 x 290 + 3 x 16 = 1208 = 1280 - padding). */
+#sighting-list { display: flex; flex-wrap: wrap; gap: 16px; list-style: none; }
+.sighting-cell { width: 290px; }
+.sighting-cell img { display: block; width: 290px; height: 163px; object-fit: cover; border-radius: 8px; background: #111; }
+.sighting-name, .sighting-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sighting-name { margin-top: 6px; font-size: 24px; }
+.sighting-meta { font-size: 18px; color: var(--muted); }
+#sighting-view { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; }
+#sighting-view img { display: block; width: 100%; height: 100%; object-fit: contain; }
+#sighting-view figcaption { font-size: 28px; text-transform: none; }
 
 /* Night mode (dim window): the backlight drops to dim.level for everything, so the camera
    images fade further here while the strip text turns red and keeps the full backlight level. */
 #frame.night .tile img, #frame.night #full img, #frame.night .sighting img,
-#frame.night .bird img, #frame.night .bird-row img { opacity: 0.3; }
+#frame.night .bird img, #frame.night .bird-row img, #frame.night .sighting-cell img,
+#frame.night #sighting-view img { opacity: 0.3; }
 #frame.night figcaption { color: #b3261e; text-shadow: none; }
 #frame.night .strip, #frame.night .strip .value, #frame.night .weather .temp,
-#frame.night .bird .cap, #frame.night #birds, #frame.night .play, #frame.night #birds-close { color: #ff3b30; }
+#frame.night .bird .cap, #frame.night #birds, #frame.night .play, #frame.night #birds-close,
+#frame.night #sightings, #frame.night #sightings-close { color: #ff3b30; }
 #frame.night #date, #frame.night .row .label, #frame.night .hilo, #frame.night #ampm, #frame.night .age,
-#frame.night .cap, #frame.night .bird-meta { color: #b3261e; }
+#frame.night .cap, #frame.night .bird-meta, #frame.night .sighting-meta { color: #b3261e; }

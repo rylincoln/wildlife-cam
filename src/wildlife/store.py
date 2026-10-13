@@ -579,6 +579,31 @@ class Store:
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def query_confirmed(self, *, source_kind: str, limit: int = 60) -> list[dict[str, Any]]:
+        """Newest-first captures whose latest ``wildlife-review`` verdict is a real
+        animal or person (``review_log``, owned by :mod:`wildlife.review`).
+
+        Empty when no review has run yet.
+        """
+        has_log = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_log'"
+        ).fetchone()
+        if not has_log:
+            return []
+        rows = self._conn.execute(
+            """
+            SELECT c.* FROM captures c
+             WHERE c.source_kind = ?
+               AND EXISTS (SELECT 1 FROM review_log r
+                            WHERE r.capture_id = c.id
+                              AND r.id = (SELECT MAX(id) FROM review_log WHERE capture_id = c.id)
+                              AND r.verdict IN ('animal', 'person'))
+             ORDER BY c.capture_ts DESC, c.id DESC LIMIT ?
+            """,
+            (source_kind, int(limit)),
+        ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
     def count(
         self,
         *,
@@ -708,6 +733,29 @@ class Store:
                      WHERE id IN ({placeholders})
                     """,
                     [label, now, *chunk],
+                )
+                total += cur.rowcount
+            self._conn.commit()
+        return total
+
+    def relabel_many(self, ids: Iterable[int], new_label: str) -> int:
+        """Set the label of many captures as a machine correction (the Claude
+        reviewer naming the species), NOT a human reclassify: ``original_label``
+        and the human-review flags are left alone, so retention and the reviewer's
+        human-protection rules still treat these as unreviewed by a person.
+        Returns the number of rows changed.
+        """
+        label = (new_label or "").strip()
+        if not label:
+            raise ValueError("new_label must be a non-empty string")
+        id_list = [int(i) for i in ids]
+        total = 0
+        with self._write_lock:
+            for chunk in _chunked(id_list, 900):
+                placeholders = ",".join("?" for _ in chunk)
+                cur = self._conn.execute(
+                    f"UPDATE captures SET label = ? WHERE id IN ({placeholders}) AND label != ?",
+                    [label, *chunk, label],
                 )
                 total += cur.rowcount
             self._conn.commit()

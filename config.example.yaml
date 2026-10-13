@@ -161,12 +161,14 @@ homeassistant: # read-only source for the /frame strip; the token never leaves t
   #  - {id: climate.thermostat, slot: temps, label: Inside}
   #  - {id: sensor.house_power, slot: energy, label: House}
 
-review: # optional daily Claude-vision review of saved captures (wildlife-review; launchd/com.wildlife.review.plist runs it at 09:00)
+review: # optional Claude-vision review of saved captures (wildlife-review; launchd/com.wildlife.review.plist runs it every 15 minutes). While enabled, /frame shows only confirmed sightings
   enabled: false # set true to let the scheduled job run (manual `wildlife-review run --dry-run` works regardless)
   backend: claude_cli # claude_cli = the `claude` CLI on its own login (a Claude subscription, no API key) | api = Anthropic API key
   model: claude-opus-5-5
   effort: low # low | medium | high | xhigh | max
   delete_min_confidence: 0.85 # only a not_animal verdict this sure deletes; unsure/low-confidence calls keep. Human-reviewed captures are never deleted
+  relabel: true # give confirmed animals the species the reviewer names (detector label kept in review_log). Human labels are never changed
+  extra_species: [dog, cat, horse, cattle] # species the reviewer may name beyond detection.animal_classes
   max_per_run: 300 # requests per run (one per object per burst event)
   concurrency: 4
   max_plan_utilization: 0.8 # claude_cli: stop a run once the plan's 5-hour or weekly usage passes this (rest waits for the next run). 1.0 disables

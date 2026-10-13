@@ -17,7 +17,9 @@ real animal or person is there.
 3. Ask Claude for a structured verdict.
 4. Delete a cluster when the verdict is ``not_animal`` at
    ``review.delete_min_confidence`` or above -- unless a human reviewed or
-   reclassified any capture in it (a human call always wins).
+   reclassified any capture in it (a human call always wins). For a confirmed
+   animal or person, relabel its captures to the species the reviewer names
+   (``review.relabel``; humans' labels are left alone).
 5. Write one ``review_log`` row per capture, deleted ones included, so the
    verdicts outlive the images and serve as ground truth for ``wildlife-replay``.
 
@@ -64,6 +66,8 @@ logger = logging.getLogger("wildlife.review")
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # Boxes in one burst event this overlapping are the same object in successive frames.
 _CLUSTER_IOU = 0.5
+# A confirmed animal is relabelled to the reviewer's species only this sure.
+_RELABEL_MIN_CONFIDENCE = 0.8
 # Leave very recent captures for the next run: the worker may still be saving
 # the rest of that burst.
 _MIN_AGE = timedelta(minutes=2)
@@ -169,6 +173,7 @@ class RunSummary:
     verdicts: Counter = field(default_factory=Counter)
     input_tokens: int = 0
     output_tokens: int = 0
+    relabelled: int = 0  # captures whose label became the reviewer's species
     stopped: str | None = None  # why the run ended early, if it did
 
 
@@ -357,6 +362,24 @@ def _jpeg(im: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+def review_species(config: Config) -> list[str]:
+    """The species the reviewer may name: the detector's classes plus ``review.extra_species``."""
+    out = list(config.detection.animal_classes)
+    out += [s for s in config.review.extra_species if s not in out]
+    return out
+
+
+def relabel_target(cluster: Cluster, v: Verdict) -> tuple[str, list[int]] | None:
+    """(new label, capture ids to change) for a confident animal/person verdict, else None."""
+    if v.verdict not in ("animal", "person") or v.confidence < _RELABEL_MIN_CONFIDENCE:
+        return None
+    label = "person" if v.verdict == "person" else v.species
+    if label in ("none", "other_animal"):
+        return None
+    ids = [m.id for m in cluster.members if not m.human_reviewed and m.label != label]
+    return (label, ids) if ids else None
+
+
 def system_prompt(cfg: ReviewConfig, species: list[str]) -> str:
     return f"""You review detections from an automatic wildlife camera pipeline. {cfg.site_notes}
 
@@ -378,7 +401,7 @@ Deleting a photo of a real animal costs far more than keeping a false positive. 
 Fields:
 - reason: one short sentence on what you see in the flagged region.
 - verdict: "animal", "person", "not_animal" or "unsure".
-- species: for an animal or person, the closest match from the allowed list ("other_animal" for a clear animal that fits none of them, such as a dog, cat or livestock); "none" otherwise. Allowed: {", ".join(species)}.
+- species: for an animal or person, the closest match from the allowed list ("other_animal" for a clear animal that fits none of them); "none" otherwise. A dog wearing a collar or near people is a domestic dog, not a coyote or fox. Allowed: {", ".join(species)}.
 - artifact: for not_animal, what the region is; "none" otherwise.
 - confidence: 0.0 to 1.0, how sure you are of the verdict."""
 
@@ -677,7 +700,7 @@ def run_review(config: Config, *, dry_run: bool, limit: int | None, since: str |
                     len(clusters), sum(len(c.members) for c in clusters),
                     " (dry run)" if dry_run else "", cfg.model,
                     "the Anthropic API" if isinstance(backend, ApiBackend) else "the claude CLI")
-        reviewer = Reviewer(backend, cfg, config.detection.animal_classes, Path(config.storage.captures_dir))
+        reviewer = Reviewer(backend, cfg, review_species(config), Path(config.storage.captures_dir))
         try:
             for cluster, verdict, usage in _judge(reviewer, clusters, cfg.concurrency):
                 if usage is not None:
@@ -689,6 +712,10 @@ def run_review(config: Config, *, dry_run: bool, limit: int | None, since: str |
                 action = decide_action(cluster, verdict, cfg, dry_run)
                 if action == "deleted":
                     store.delete_many([m.id for m in cluster.members])
+                # A dry run leaves the captures untouched: no deletes, no relabels.
+                target = relabel_target(cluster, verdict) if cfg.relabel and not dry_run else None
+                if target is not None:
+                    summary.relabelled += store.relabel_many(target[1], target[0])
                 log.record(cluster, verdict, action, cfg.model)
                 summary.captures += len(cluster.members)
                 summary.actions[action] += len(cluster.members)
@@ -704,9 +731,9 @@ def run_review(config: Config, *, dry_run: bool, limit: int | None, since: str |
     finally:
         log.close()
         store.close()
-    logger.info("Done: %d cluster(s), %d failed; captures by action %s; tokens in=%d out=%d.",
-                summary.clusters, summary.failed, dict(summary.actions),
-                summary.input_tokens, summary.output_tokens)
+    logger.info("Done: %d cluster(s), %d failed; captures by action %s, %d relabelled; "
+                "tokens in=%d out=%d.", summary.clusters, summary.failed, dict(summary.actions),
+                summary.relabelled, summary.input_tokens, summary.output_tokens)
     return summary
 
 
@@ -733,7 +760,7 @@ def check(config: Config, ids: list[int], client=None, backend=None) -> None:
     finally:
         log.close()
     reviewer = Reviewer(backend or make_backend(cfg, client), cfg,
-                        config.detection.animal_classes, Path(config.storage.captures_dir))
+                        review_species(config), Path(config.storage.captures_dir))
     for cluster, verdict, usage in _judge(reviewer, clusters, cfg.concurrency):
         c = cluster.rep
         print(json.dumps({"id": c.id, "label": c.label, "detector_confidence": round(c.confidence, 3),
