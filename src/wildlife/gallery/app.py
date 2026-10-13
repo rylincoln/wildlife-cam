@@ -490,10 +490,23 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             rows = store.query(source_kind=source_kind, limit=limit)
         return [_serialize(r) for r in rows]
 
+    def _sighting_events(before: str | None, limit: int) -> list[dict]:
+        """One page of camera events (best frame each) for the frame's history scroll,
+        reviewer-confirmed only while the review runs, like :func:`_recent_captures`."""
+        from wildlife.frame.wildlife import CAMERA_KINDS
+
+        rows = get_store().query_events(
+            source_kinds=CAMERA_KINDS,
+            confirmed_only=get_config().review.enabled,
+            before=before,
+            limit=limit,
+        )
+        return [{**_serialize(r), "event_latest": r["event_latest"]} for r in rows]
+
     from wildlife.frame.routes import create_frame_blueprint
 
     app.register_blueprint(
-        create_frame_blueprint(get_config, lambda: _live_base(False), _recent_captures)
+        create_frame_blueprint(get_config, lambda: _live_base(False), _recent_captures, _sighting_events)
     )
 
     # ----------------------------------------------------------------------- #

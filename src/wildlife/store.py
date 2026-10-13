@@ -604,6 +604,68 @@ class Store:
         ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def query_events(
+        self,
+        *,
+        source_kinds: Iterable[str],
+        confirmed_only: bool = False,
+        before: str | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Newest-first camera events, one capture each, for paging back through history.
+
+        An event is one ``(camera_id, event_ts)`` burst, shown by its most confident
+        frame; each row carries ``event_latest``, the burst's newest ``capture_ts``.
+        ``before`` keeps only events whose ``event_latest`` is strictly older, so the
+        last row's ``event_latest`` is the cursor for the next page. Grouping happens
+        before the LIMIT, so a burst is never split across pages. ``confirmed_only``
+        counts only captures whose latest ``review_log`` verdict is an animal or person
+        (empty when no review has run).
+        """
+        kinds = list(source_kinds)
+        if not kinds:
+            return []
+        clauses = [f"c.source_kind IN ({', '.join('?' for _ in kinds)})"]
+        params: list[Any] = list(kinds)
+        if confirmed_only:
+            has_log = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_log'"
+            ).fetchone()
+            if not has_log:
+                return []
+            clauses.append(
+                """EXISTS (SELECT 1 FROM review_log r
+                            WHERE r.capture_id = c.id
+                              AND r.id = (SELECT MAX(id) FROM review_log WHERE capture_id = c.id)
+                              AND r.verdict IN ('animal', 'person'))"""
+            )
+        having = ""
+        if before is not None:
+            having = "HAVING MAX(capture_ts) < ?"
+        sql = f"""
+            WITH caps AS (SELECT c.* FROM captures c WHERE {" AND ".join(clauses)}),
+                 events AS (SELECT camera_id, event_ts, MAX(capture_ts) AS latest
+                              FROM caps GROUP BY camera_id, event_ts {having}
+                             ORDER BY latest DESC LIMIT ?)
+            SELECT caps.*, events.latest AS event_latest
+              FROM caps JOIN events
+                ON caps.camera_id = events.camera_id AND caps.event_ts = events.event_ts
+             ORDER BY events.latest DESC, caps.camera_id, caps.event_ts,
+                      caps.confidence DESC, caps.capture_ts DESC, caps.id DESC
+        """
+        if before is not None:
+            params.append(before)
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in self._conn.execute(sql, params).fetchall():
+            key = (row["camera_id"], row["event_ts"])
+            if key in seen:  # rows of one event arrive best-first; keep that one
+                continue
+            seen.add(key)
+            out.append({**self._row_to_dict(row), "event_latest": row["event_latest"]})
+        return out
+
     def count(
         self,
         *,

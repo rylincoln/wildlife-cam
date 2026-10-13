@@ -4,6 +4,8 @@
 * ``GET /frame/state`` -- server time, night-dim state and the allow-listed HA
   snapshot; also records the polling client so ``/frame/info`` can report it.
 * ``GET /frame/wildlife`` -- recent camera sightings + recent distinct bird IDs.
+* ``GET /frame/sightings?before=<ts>`` -- the next page of older sightings for the
+  scrolling Recent sightings panel (``next`` is the cursor, null at the end).
 * ``GET /frame/info``  -- plain-text last poller (IP, time, user agent) to find the
   frame on the LAN (its Wi-Fi MAC/IP change on every boot).
 
@@ -22,7 +24,7 @@ from flask import Blueprint, Response, abort, jsonify, render_template, request
 from wildlife.config import Config
 from wildlife.frame.ha import HACache
 from wildlife.frame.schedule import in_window
-from wildlife.frame.wildlife import CAMERA_KINDS, build_wildlife
+from wildlife.frame.wildlife import CAMERA_KINDS, build_wildlife, sightings_page
 
 __all__ = ["create_frame_blueprint"]
 
@@ -33,6 +35,7 @@ BIRD_SCAN = 60  # recent audio rows scanned for up to 12 distinct species
 # Recent camera rows scanned per provenance for up to 12 events: a burst event can
 # save up to burst_frames rows (more with several objects).
 SIGHTING_SCAN = 150
+SIGHTINGS_PAGE = 12  # one more is fetched to know whether older history exists
 _NO_HA = {"ok": False, "stale": True, "age_seconds": None, "items": [], "forecast": None}
 
 
@@ -57,6 +60,7 @@ def create_frame_blueprint(
     get_config: Callable[[], Config],
     go2rtc_base: Callable[[], str],
     recent_captures: Callable[[str, int], list[dict]] | None = None,
+    sighting_events: Callable[[str | None, int], list[dict]] | None = None,
 ) -> Blueprint:
     """Build the frame blueprint.
 
@@ -66,6 +70,8 @@ def create_frame_blueprint(
             e.g. ``http://192.168.1.193:1984/go2rtc``.
         recent_captures: ``(source_kind, limit) -> serialized captures`` (newest
             first) for ``/frame/wildlife``; without it the panel stays empty.
+        sighting_events: ``(before, limit) -> serialized event captures`` (newest
+            first, each with ``event_latest``) for ``/frame/sightings`` paging.
     """
     bp = Blueprint("frame", __name__)
     cache = HACache()
@@ -136,6 +142,28 @@ def create_frame_blueprint(
                 data = build_wildlife(cameras, recent_captures("audio", BIRD_SCAN), _now())
             except Exception:  # the panel is a nicety; never break the page over it
                 logger.exception("Wildlife lookup failed")
+        resp = jsonify(data)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @bp.route("/frame/sightings")
+    def frame_sightings():
+        _enabled_config()
+        before = request.args.get("before") or None
+        if before is not None:
+            try:
+                datetime.fromisoformat(before)
+            except ValueError:
+                abort(400)
+        data: dict = {"sightings": [], "next": None}
+        if sighting_events is not None:
+            try:
+                rows = sighting_events(before, SIGHTINGS_PAGE + 1)
+                items = sightings_page(rows[:SIGHTINGS_PAGE], _now())
+                more = len(rows) > SIGHTINGS_PAGE and bool(items)
+                data = {"sightings": items, "next": items[-1]["ts"] if more else None}
+            except Exception:  # the panel is a nicety; never break the page over it
+                logger.exception("Sightings page lookup failed")
         resp = jsonify(data)
         resp.headers["Cache-Control"] = "no-store"
         return resp

@@ -18,13 +18,14 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime, tzinfo
 from typing import Any
 
 from wildlife.config import HAEntityConfig, HomeAssistantConfig
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["KEPT_ATTRS", "HACache", "display_value", "flow_value", "urllib_fetch"]
+__all__ = ["KEPT_ATTRS", "HACache", "compass", "display_value", "flow_value", "sun_text", "urllib_fetch"]
 
 KEPT_ATTRS = (
     "temperature",
@@ -56,6 +57,9 @@ CONDITIONS = {
     "windy": "Windy",
     "windy-variant": "Windy",
 }
+
+_COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+COMPANIONS = ("flow", "direction", "gust")  # extra entities a row may name (fetched with it)
 
 Fetch = Callable[[str, str, dict, "bytes | None", float], Any]
 
@@ -100,6 +104,10 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
         return _DASH
     if unit in ("in", "in/h"):  # rain gauges: hundredths of an inch matter
         return f'{number:.2f}"' + ("/h" if unit == "in/h" else "")
+    if unit == "inHg":  # barometric pressure moves in hundredths
+        return f"{number:.2f} inHg"
+    if unit in ("mph", "km/h"):  # wind: whole numbers read faster
+        return f"{round(number)} {unit}"
     if unit == "W" and abs(number) >= 1000:
         number, unit = number / 1000, "kW"
     text = _num(number)
@@ -137,6 +145,49 @@ def flow_value(state: str | None, unit: str | None) -> str | None:
     return f"{sign}{abs(whole)} W"
 
 
+def compass(degrees: Any) -> str | None:
+    """16-point compass name for a bearing in degrees (19 -> 'NNE'); None if not a number."""
+    try:
+        value = float(degrees)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(value) or math.isinf(value):
+        return None
+    return _COMPASS[round(value / 22.5) % 16]
+
+
+def _clock_at(value: Any, tz: tzinfo | None) -> str | None:
+    """'7:12 AM' for an ISO timestamp in ``tz`` (None = this server's zone); None if unparseable."""
+    try:
+        moment = datetime.fromisoformat(str(value)).astimezone(tz)
+    except ValueError:
+        return None
+    return f"{moment.hour % 12 or 12}:{moment.minute:02d} {'AM' if moment.hour < 12 else 'PM'}"
+
+
+def sun_text(attrs: dict, tz: tzinfo | None = None) -> str:
+    """'↑ 7:12 AM · ↓ 6:31 PM' from sun.sun's next rising/setting, leaving out missing parts."""
+    rise = _clock_at(attrs.get("next_rising"), tz) if attrs.get("next_rising") else None
+    sets = _clock_at(attrs.get("next_setting"), tz) if attrs.get("next_setting") else None
+    parts = [f"↑ {rise}" if rise else "", f"↓ {sets}" if sets else ""]
+    return " · ".join(p for p in parts if p) or _DASH
+
+
+def _wind_text(display: str, direction: dict | None, gust: dict | None) -> str:
+    """'1 mph NNE · gust 14': speed, then whichever companions have a reading."""
+    if display == _DASH:
+        return _DASH
+    point = compass((direction or {}).get("state"))
+    text = f"{display} {point}" if point else display
+    try:
+        gust_value = float((gust or {}).get("state"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return text
+    if math.isnan(gust_value) or math.isinf(gust_value):
+        return text
+    return f"{text} · gust {round(gust_value)}"
+
+
 def _hilo(high: Any, low: Any) -> str | None:
     """'H 78°  L 51°' from today's forecast, leaving out missing parts (never 'L 0°')."""
     parts = []
@@ -147,18 +198,28 @@ def _hilo(high: Any, low: Any) -> str | None:
     return "  ".join(parts) or None
 
 
-def _shape(entity: HAEntityConfig, payload: dict | None, flow_payload: dict | None = None) -> dict:
+def _shape(
+    entity: HAEntityConfig,
+    payload: dict | None,
+    extras: dict[str, dict | None] | None = None,
+    tz: tzinfo | None = None,
+) -> dict:
     payload = payload or {}
+    extras = extras or {}
     attrs = payload.get("attributes") or {}
     state = payload.get("state")
     unit = attrs.get("unit_of_measurement")
     kept = {k: attrs[k] for k in KEPT_ATTRS if k in attrs}
     display = display_value(entity.slot, state, unit, kept)
+    if entity.id.startswith("sun.") and state not in (None, *_MISSING):
+        display = sun_text(attrs, tz)
+    if entity.direction or entity.gust:
+        display = _wind_text(display, extras.get("direction"), extras.get("gust"))
     flow = None
     if entity.flow:
         if unit == "%" and display != _DASH:
             display = f"{round(float(state))}%"  # whole percent leaves room for the flow
-        flow_payload = flow_payload or {}
+        flow_payload = extras.get("flow") or {}
         flow = flow_value(
             flow_payload.get("state"), (flow_payload.get("attributes") or {}).get("unit_of_measurement")
         )
@@ -177,9 +238,15 @@ def _shape(entity: HAEntityConfig, payload: dict | None, flow_payload: dict | No
 class HACache:
     """Shared, thread-safe, allow-listed snapshot of Home Assistant state."""
 
-    def __init__(self, fetch: Fetch | None = None, clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        fetch: Fetch | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        tz: tzinfo | None = None,  # sunrise/sunset zone; None = this server's
+    ):
         self._fetch = fetch
         self._clock = clock
+        self._tz = tz
         self._lock = threading.Lock()
         self._reset(None)
 
@@ -203,7 +270,7 @@ class HACache:
             ha.url,
             ha.token,
             ha.timeout_seconds,
-            tuple((e.id, e.slot, e.label, e.flow) for e in ha.entities),
+            tuple((e.id, e.slot, e.label, e.flow, e.direction, e.gust) for e in ha.entities),
         )
         with self._lock:
             if key != self._key:
@@ -252,8 +319,12 @@ class HACache:
         try:
             for entity in ha.entities:
                 payload = self._state(ha, entity.id)
-                flow_payload = self._state(ha, entity.flow) if entity.flow else None
-                items.append(_shape(entity, payload, flow_payload))
+                extras = {
+                    name: self._state(ha, getattr(entity, name))
+                    for name in COMPANIONS
+                    if getattr(entity, name)
+                }
+                items.append(_shape(entity, payload, extras, self._tz))
         except Exception as err:  # noqa: BLE001 - any HA fault (incl. http.client) -> stale
             if not self._down:
                 logger.warning("Home Assistant unavailable (%s); serving last good values", err)

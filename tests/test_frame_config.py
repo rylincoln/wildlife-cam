@@ -94,6 +94,20 @@ def test_energy_row_can_name_a_battery_flow_sensor() -> None:
         HAEntityConfig(id="sensor.shop_battery_soc", slot="energy", flow="sensor.x/../../api")
 
 
+def test_conditions_slot_and_wind_companions() -> None:
+    wind = HAEntityConfig(
+        id="sensor.station_wind_speed", slot="conditions", label="Wind",
+        direction="sensor.station_wind_direction", gust="sensor.station_max_gust",
+    )
+    assert (wind.slot, wind.direction, wind.gust) == (
+        "conditions", "sensor.station_wind_direction", "sensor.station_max_gust"
+    )
+    assert HAEntityConfig(id="sun.sun", slot="conditions", label="Sun").direction is None
+    for field in ("direction", "gust"):  # allow-listed like id
+        with pytest.raises(ValidationError):
+            HAEntityConfig(id="sensor.station_wind_speed", slot="conditions", **{field: "sensor.x/../api"})
+
+
 def test_ha_timeout_is_capped_below_the_page_poll_timeout() -> None:  # minor #9
     with pytest.raises(ValidationError):
         HomeAssistantConfig(timeout_seconds=6)

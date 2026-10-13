@@ -6,11 +6,12 @@ import http.client
 import json
 import logging
 import urllib.error
+from datetime import timedelta, timezone
 
 import pytest
 
 from wildlife.config import HAEntityConfig, HomeAssistantConfig
-from wildlife.frame.ha import HACache, display_value, flow_value
+from wildlife.frame.ha import HACache, compass, display_value, flow_value, sun_text
 
 
 class FakeHA:
@@ -399,3 +400,115 @@ def test_changing_the_flow_sensor_invalidates_cache() -> None:
     cache.snapshot(_ha(SOC), 15)
     moved = SOC.model_copy(update={"flow": "sensor.shed_shunt_power"})
     assert cache.snapshot(_ha(moved), 15)["items"][0]["flow"] == "−420 W"
+
+
+# ---- weather conditions rows (wind, sun, humidity, pressure) ---------------
+
+MDT = timezone(timedelta(hours=-6))
+
+
+@pytest.mark.parametrize(
+    ("degrees", "expected"),
+    [
+        (0, "N"), (19, "NNE"), (11.2, "N"), (11.3, "NNE"), (90, "E"), (202.5, "SSW"),
+        (348.75, "N"), (359, "N"), ("19", "NNE"), (None, None), ("unknown", None), ("nan", None),
+    ],
+)
+def test_compass(degrees, expected) -> None:
+    assert compass(degrees) == expected
+
+
+@pytest.mark.parametrize(
+    ("state", "unit", "expected"),
+    [
+        ("29.811", "inHg", "29.81 inHg"),  # pressure needs hundredths, like the rain gauge
+        ("1.1", "mph", "1 mph"),  # wind in whole mph
+        ("13.6", "mph", "14 mph"),
+        ("96", "%", "96%"),
+    ],
+)
+def test_conditions_values(state, unit, expected) -> None:
+    assert display_value("conditions", state, unit, {}) == expected
+
+
+def test_sun_text_shows_next_rise_and_set_in_local_time() -> None:
+    attrs = {"next_rising": "2026-10-14T13:12:31.5+00:00", "next_setting": "2026-10-14T00:31:02+00:00"}
+    assert sun_text(attrs, MDT) == "↑ 7:12 AM · ↓ 6:31 PM"
+
+
+@pytest.mark.parametrize(
+    ("attrs", "expected"),
+    [
+        ({"next_setting": "2026-10-14T00:31:02+00:00"}, "↓ 6:31 PM"),
+        ({}, "—"),
+        ({"next_rising": "garbage", "next_setting": None}, "—"),
+    ],
+)
+def test_sun_text_leaves_out_missing_parts(attrs: dict, expected: str) -> None:
+    assert sun_text(attrs, MDT) == expected
+
+
+WIND = HAEntityConfig(
+    id="sensor.wind_speed", slot="conditions", label="Wind",
+    direction="sensor.wind_direction", gust="sensor.max_gust",
+)
+
+
+def _wind_states(speed: str = "1.1", direction: str = "19", gust: str = "13.6") -> dict:
+    def row(entity_id: str, state: str, unit: str) -> dict:
+        return {"entity_id": entity_id, "state": state, "attributes": {"unit_of_measurement": unit}}
+
+    return {
+        "sensor.wind_speed": row("sensor.wind_speed", speed, "mph"),
+        "sensor.wind_direction": row("sensor.wind_direction", direction, "°"),
+        "sensor.max_gust": row("sensor.max_gust", gust, "mph"),
+    }
+
+
+def test_wind_row_combines_speed_compass_and_gust() -> None:
+    fake = FakeHA(_wind_states())
+    item = HACache(fetch=fake, clock=Clock()).snapshot(_ha(WIND), 15)["items"][0]
+    assert item["display"] == "1 mph NNE · gust 14"
+    assert {url.rsplit("/", 1)[1] for _, url in fake.calls} == {
+        "sensor.wind_speed", "sensor.wind_direction", "sensor.max_gust",
+    }
+
+
+def test_wind_row_drops_missing_companions() -> None:
+    states = _wind_states(gust="unavailable")
+    del states["sensor.wind_direction"]  # HA answers 404
+    item = HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(WIND), 15)["items"][0]
+    assert item["display"] == "1 mph"
+
+
+def test_wind_row_without_a_speed_is_a_dash() -> None:
+    item = HACache(fetch=FakeHA(_wind_states(speed="unknown")), clock=Clock()).snapshot(_ha(WIND), 15)
+    assert item["items"][0]["display"] == "—"
+
+
+def test_sun_row_through_the_cache_keeps_its_attributes_private() -> None:
+    sun = HAEntityConfig(id="sun.sun", slot="conditions", label="Sun")
+    states = {
+        "sun.sun": {
+            "entity_id": "sun.sun",
+            "state": "above_horizon",
+            "attributes": {
+                "next_rising": "2026-10-14T13:12:31+00:00",
+                "next_setting": "2026-10-14T00:31:02+00:00",
+                "elevation": 31.2,
+                "friendly_name": "Sun",
+            },
+        }
+    }
+    item = HACache(fetch=FakeHA(states), clock=Clock(), tz=MDT).snapshot(_ha(sun), 15)["items"][0]
+    assert (item["label"], item["display"], item["attrs"]) == ("Sun", "↑ 7:12 AM · ↓ 6:31 PM", {})
+
+
+def test_changing_wind_companions_invalidates_cache() -> None:
+    states = _wind_states()
+    states["sensor.other_gust"] = {"entity_id": "sensor.other_gust", "state": "30.2",
+                                   "attributes": {"unit_of_measurement": "mph"}}
+    cache = HACache(fetch=FakeHA(states), clock=Clock())
+    cache.snapshot(_ha(WIND), 15)
+    moved = WIND.model_copy(update={"gust": "sensor.other_gust"})
+    assert cache.snapshot(_ha(moved), 15)["items"][0]["display"] == "1 mph NNE · gust 30"

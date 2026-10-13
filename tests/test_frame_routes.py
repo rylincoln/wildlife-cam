@@ -384,3 +384,16 @@ def test_bird_sits_under_the_camera_sighting_leaving_the_weather_column_free(tmp
     body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
     clock, mid = body.index('<div class="clock">'), body.index('<div class="mid">')
     assert clock < body.index('id="sighting"') < body.index('id="bird"') < mid
+
+
+def test_page_has_conditions_rows_under_the_rain(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert body.index('id="rain"') < body.index('id="conditions"') < body.index('<div id="values">')
+    assert 'item.slot === "conditions"' in body
+
+
+def test_photos_that_fail_to_load_hide_instead_of_showing_a_broken_icon(tmp_path: Path) -> None:
+    # A bird with no cached reference photo (/species_photo 404) showed Chrome's broken-image box.
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    assert 'function quietImg(img)' in body and 'img.style.visibility = "hidden"' in body
+    assert body.count("quietImg(") >= 4  # definition + strip thumbs, sighting cells, bird rows

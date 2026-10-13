@@ -33,6 +33,7 @@
     <div class="mid">
       <div class="weather" id="weather"></div>
       <div id="rain" class="rain"></div>
+      <div id="conditions" class="rain conditions"></div>
     </div>
     <div id="values"></div>
   </section>
@@ -210,10 +211,13 @@
     var weather = document.getElementById("weather");
     var values = document.getElementById("values");
     var rain = document.getElementById("rain");
+    var conditions = document.getElementById("conditions");   // wind, sun, humidity, pressure
     clear(weather);
     clear(values);
     clear(rain);
+    clear(conditions);
     rain.className = ha.stale ? "rain stale" : "rain";
+    conditions.className = ha.stale ? "rain conditions stale" : "rain conditions";
     // Only the HA values fade when stale; the clock keeps full brightness.
     weather.className = ha.stale ? "weather stale" : "weather";
     values.className = ha.stale ? "stale" : "";
@@ -233,7 +237,9 @@
         value.appendChild(el("span", "flow", item.flow));
       }
       row.appendChild(value);
-      (item.slot === "rain" ? rain : values).appendChild(row);
+      if (item.slot === "rain") { rain.appendChild(row); }
+      else if (item.slot === "conditions") { conditions.appendChild(row); }
+      else { values.appendChild(row); }
     });
     if (ha.stale && ha.age_seconds !== null) {
       var mins = Math.round(ha.age_seconds / 60);
@@ -284,8 +290,15 @@
   var latestSightings = [];
   var playingButton = null;
 
+  // A photo that fails to load (e.g. a bird with no cached reference photo) leaves
+  // an empty space instead of Chrome's broken-image box; the layout stays put.
+  function quietImg(img) {
+    img.onerror = function () { img.style.visibility = "hidden"; };
+    img.onload = function () { img.style.visibility = ""; };
+    return img;
+  }
   function showThumb(box, url, label, time) {
-    var img = box.querySelector("img");
+    var img = quietImg(box.querySelector("img"));
     if (url) { img.src = url; img.hidden = false; } else { img.hidden = true; }
     var cap = box.querySelector(".cap");   // name over time, each one line (never wraps mid-time)
     clear(cap);
@@ -335,7 +348,7 @@
     clear(list);
     latestBirds.forEach(function (bird) {
       var row = el("li", "bird-row");
-      var img = el("img");
+      var img = quietImg(el("img"));
       img.alt = "";
       if (bird.photo_url) { img.src = bird.photo_url; }
       row.appendChild(img);
@@ -381,21 +394,71 @@
     sightingView.hidden = true;
     sightingView.querySelector("img").removeAttribute("src");   // drop the full-size photo
   }
-  function renderSightingList() {
-    var list = document.getElementById("sighting-list");
-    clear(list);
-    latestSightings.forEach(function (s) {
-      var cell = el("li", "sighting-cell");
-      var img = el("img");
-      img.alt = "";
-      if (s.thumb_url) { img.src = s.thumb_url; }
-      cell.appendChild(img);
-      cell.appendChild(el("div", "sighting-name", s.label));
-      cell.appendChild(el("div", "sighting-meta", s.camera + " \u00b7 " + s.time));
-      cell.addEventListener("click", function (ev) { ev.stopPropagation(); bumpSightings(); showSighting(s); });
-      list.appendChild(cell);
-    });
+  // The grid scrolls; nearing the bottom loads the next 12 older events from
+  // /frame/sightings, back through all reviewed history. Closing clears it all.
+  var sightingList = document.getElementById("sighting-list");
+  var olderCursor = null;    // "ts" of the oldest event shown; null = nothing older
+  var loadingOlder = false;
+  var sightingsGen = 0;      // bumped on close so a page that lands late is dropped
+  function sightingCell(s) {
+    var cell = el("li", "sighting-cell");
+    var img = quietImg(el("img"));
+    img.alt = "";
+    if (s.thumb_url) { img.src = s.thumb_url; }
+    cell.appendChild(img);
+    cell.appendChild(el("div", "sighting-name", s.label));
+    cell.appendChild(el("div", "sighting-meta", s.camera + " \u00b7 " + s.time));
+    cell.addEventListener("click", function (ev) { ev.stopPropagation(); bumpSightings(); showSighting(s); });
+    return cell;
   }
+  function sightingsFooter(text) {
+    var footer = document.getElementById("sighting-footer");
+    if (!footer) {
+      footer = el("li", "sighting-footer");
+      footer.id = "sighting-footer";
+    }
+    footer.textContent = text;
+    sightingList.appendChild(footer);   // always the last item
+  }
+  function renderSightingList() {
+    clear(sightingList);
+    latestSightings.forEach(function (s) { sightingList.appendChild(sightingCell(s)); });
+    olderCursor = latestSightings[latestSightings.length - 1].ts || null;
+    sightingsFooter("");
+  }
+  function loadOlderSightings() {
+    if (loadingOlder || !olderCursor) { return; }
+    loadingOlder = true;
+    var gen = sightingsGen;
+    sightingsFooter("Loading\u2026");
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/frame/sightings?before=" + encodeURIComponent(olderCursor));
+    xhr.timeout = 10000;
+    xhr.onload = function () {
+      if (gen !== sightingsGen) { return; }
+      loadingOlder = false;
+      var page = null;
+      try { page = JSON.parse(xhr.responseText); } catch (e) { page = null; }
+      if (xhr.status !== 200 || !page) { sightingsFooter(""); return; }   // the next scroll retries
+      var footer = document.getElementById("sighting-footer");
+      page.sightings.forEach(function (s) { sightingList.insertBefore(sightingCell(s), footer); });
+      olderCursor = page.next;
+      sightingsFooter(olderCursor ? "" : "No older sightings");
+      loadIfNearBottom();   // a short page may not fill the screen yet
+    };
+    xhr.onerror = xhr.ontimeout = function () {
+      if (gen !== sightingsGen) { return; }
+      loadingOlder = false;
+      sightingsFooter("");
+    };
+    xhr.send();
+  }
+  function loadIfNearBottom() {
+    if (sightingList.scrollTop + sightingList.clientHeight >= sightingList.scrollHeight - 400) {
+      loadOlderSightings();
+    }
+  }
+  sightingList.addEventListener("scroll", function () { bumpSightings(); loadIfNearBottom(); });
   function bumpSightings() {
     clearTimeout(sightingsTimer);
     sightingsTimer = setTimeout(closeSightings, SIGHTINGS_IDLE_MS);
@@ -406,12 +469,17 @@
     renderSightingList();
     hideSighting();
     sightingsPanel.hidden = false;
+    sightingList.scrollTop = 0;
     bumpSightings();
+    loadIfNearBottom();   // the first 12 don't fill the grid, so fetch the next page now
   }
   function closeSightings() {
     clearTimeout(sightingsTimer);
     hideSighting();
-    clear(document.getElementById("sighting-list"));
+    sightingsGen += 1;
+    loadingOlder = false;
+    olderCursor = null;
+    clear(sightingList);
     sightingsPanel.hidden = true;
     if (streamsWanted()) { attachAll(); }
   }

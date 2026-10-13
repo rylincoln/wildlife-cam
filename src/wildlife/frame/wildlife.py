@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-__all__ = ["CAMERA_KINDS", "build_wildlife", "pretty_label", "time_text"]
+__all__ = ["CAMERA_KINDS", "build_wildlife", "pretty_label", "sightings_page", "time_text"]
 
 CAMERA_KINDS = ("reolink", "continuous")
 
@@ -68,7 +68,9 @@ def _events(camera_caps: list[dict]) -> list[dict]:
         held = best.get(key)
         if held is None or (cap.get("confidence") or 0.0) > (held.get("confidence") or 0.0):
             best[key] = cap
-    return [best[k] for k in sorted(best, key=lambda k: latest[k], reverse=True)]
+    return [
+        {**best[k], "event_latest": latest[k]} for k in sorted(best, key=lambda k: latest[k], reverse=True)
+    ]
 
 
 def _sighting(cap: dict, now: datetime) -> dict:
@@ -79,7 +81,14 @@ def _sighting(cap: dict, now: datetime) -> dict:
         "confidence": _confidence(cap.get("confidence")),
         "thumb_url": cap.get("thumb_url"),
         "image_url": cap.get("image_url"),
+        # The event's newest capture: the panel's cursor for paging further back.
+        "ts": cap.get("event_latest") or cap["capture_ts"],
     }
+
+
+def sightings_page(event_caps: list[dict], now: datetime) -> list[dict]:
+    """Shape one page of :meth:`wildlife.store.Store.query_events` rows for the panel."""
+    return [_sighting(c, now) for c in event_caps if isinstance(c.get("capture_ts"), str)]
 
 
 def build_wildlife(

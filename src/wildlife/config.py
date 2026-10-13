@@ -497,11 +497,15 @@ class HAEntityConfig(BaseModel):
     """One allow-listed Home Assistant entity shown in the frame's strip."""
 
     id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
-    slot: Literal["weather", "temps", "energy", "rain"]
+    slot: Literal["weather", "temps", "energy", "rain", "conditions"]
     label: str = ""  # empty -> HA friendly_name
     # Optional battery power (W/kW) or current (A) sensor, positive = charging as Victron
     # shunts report, shown after this row's value, e.g. "75%  −6.6 A". Allow-listed like ``id``.
     flow: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+    # Optional wind companions for a wind-speed row: direction in degrees (shown as a
+    # compass point) and a gust speed, e.g. "1 mph NNE · gust 14". Allow-listed like ``id``.
+    direction: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
+    gust: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
 
 
 class HomeAssistantConfig(BaseModel):

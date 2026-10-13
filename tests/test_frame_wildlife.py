@@ -73,6 +73,7 @@ def test_sighting_is_the_newest_camera_capture_across_kinds() -> None:
     assert build_wildlife(cams, [], NOW)["sighting"] == {
         "label": "Red fox", "camera": "fenceline behind shop", "time": "5:55 AM",
         "confidence": "90%", "thumb_url": "/thumb/2", "image_url": "/image/2",
+        "ts": "2026-10-12T05:55:09",
     }
 
 
