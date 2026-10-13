@@ -11,7 +11,7 @@ from datetime import timedelta, timezone
 import pytest
 
 from wildlife.config import HAEntityConfig, HomeAssistantConfig
-from wildlife.frame.ha import HACache, compass, display_value, flow_value, sun_text
+from wildlife.frame.ha import HACache, compass, display_value, flow_value, sun_text, volts_value
 
 
 class FakeHA:
@@ -79,6 +79,7 @@ def test_snapshot_returns_allow_listed_items_with_filtered_attrs() -> None:
         "slot": "temps", "label": "Outside", "state": "68.4", "unit": "°F",
         "attrs": {}, "display": "68.4°", "flow": None, "detail": "",
         "icon": None, "icon_tone": None, "level": None, "value_tone": None, "flow_tone": None,
+        "volts": None,
     }
     weather = snap["items"][1]
     assert weather["attrs"] == {"temperature": 72, "temperature_unit": "°F", "humidity": 30}
@@ -130,6 +131,7 @@ def test_unknown_entity_does_not_break_the_strip() -> None:  # Review Focus 1
         "slot": "temps", "label": "Typo", "state": None, "unit": None,
         "attrs": {}, "display": "—", "flow": None, "detail": "",
         "icon": None, "icon_tone": None, "level": None, "value_tone": None, "flow_tone": None,
+        "volts": None,
     }
 
 
@@ -577,3 +579,32 @@ def test_weather_row_gets_a_condition_glyph(condition: str, icon, tone) -> None:
     states = {"weather.home": {**STATES["weather.home"], "state": condition}}
     item = HACache(fetch=FakeHA(states), clock=Clock()).snapshot(_ha(WX), 15)["items"][0]
     assert (item["icon"], item["icon_tone"]) == (icon, tone)
+
+
+# ---- battery voltage from the shunt -----------------------------------------
+
+@pytest.mark.parametrize(
+    ("state", "unit", "expected"),
+    [("53.21", "V", "53.2 V"), ("25.8", "V", "25.8 V"), ("25", "V", "25.0 V"),
+     ("53210", "mV", "53.2 V"), ("unavailable", "V", None), ("nan", "V", None),
+     ("12", "A", None), ("12", None, None)],
+)
+def test_volts_value(state, unit, expected) -> None:
+    assert volts_value(state, unit) == expected
+
+
+def test_battery_row_carries_the_shunt_voltage() -> None:
+    entity = SOC.model_copy(update={"volts": "sensor.shop_shunt_voltage"})
+    states = _battery_states()
+    states["sensor.shop_shunt_voltage"] = {"entity_id": "sensor.shop_shunt_voltage", "state": "53.21",
+                                           "attributes": {"unit_of_measurement": "V"}}
+    fake = FakeHA(states)
+    item = HACache(fetch=fake, clock=Clock()).snapshot(_ha(entity), 15)["items"][0]
+    assert (item["display"], item["volts"], item["flow"]) == ("75%", "53.2 V", "+1.3 kW")
+    assert "sensor.shop_shunt_voltage" in {url.rsplit("/", 1)[1] for _, url in fake.calls}
+
+
+def test_missing_voltage_sensor_leaves_the_row_as_it_was() -> None:
+    entity = SOC.model_copy(update={"volts": "sensor.gone_voltage"})  # HA answers 404
+    item = HACache(fetch=FakeHA(_battery_states()), clock=Clock()).snapshot(_ha(entity), 15)["items"][0]
+    assert (item["display"], item["volts"], item["flow"]) == ("75%", None, "+1.3 kW")

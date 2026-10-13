@@ -85,6 +85,7 @@ figcaption {
 .wx.tone-sun { color: var(--sun); }
 .wx.tone-sky { color: var(--sky); }
 .row .flow { margin-left: 18px; }
+.row .volts { margin-left: 18px; color: var(--muted); }
 .age { font-size: 18px; color: var(--muted); }
 #offline { top: auto; bottom: 16px; right: 16px; color: var(--warn); }
 #dimmer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; pointer-events: none; }

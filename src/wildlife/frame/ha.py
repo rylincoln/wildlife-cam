@@ -25,7 +25,9 @@ from wildlife.config import HAEntityConfig, HomeAssistantConfig
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["KEPT_ATTRS", "HACache", "compass", "display_value", "flow_value", "sun_text", "urllib_fetch"]
+__all__ = [
+    "KEPT_ATTRS", "HACache", "compass", "display_value", "flow_value", "sun_text", "urllib_fetch", "volts_value",
+]
 
 KEPT_ATTRS = (
     "temperature",
@@ -59,7 +61,7 @@ CONDITIONS = {
 }
 
 _COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
-COMPANIONS = ("flow", "direction", "gust")  # extra entities a row may name (fetched with it)
+COMPANIONS = ("flow", "direction", "gust", "volts")  # extra entities a row may name (fetched with it)
 # Weather condition -> (glyph the page draws, colour tone). Unlisted conditions get no glyph.
 WEATHER_GLYPHS = {
     "sunny": ("sun", "sun"),
@@ -165,6 +167,16 @@ def flow_value(state: str | None, unit: str | None) -> str | None:
     return f"{sign}{abs(whole)} W"
 
 
+def volts_value(state: str | None, unit: str | None) -> str | None:
+    """'53.2 V' from a voltage sensor in V or mV; None when there is no usable reading."""
+    if unit not in ("V", "mV"):
+        return None
+    volts = _number(state)
+    if volts is None:
+        return None
+    return f"{volts / 1000 if unit == 'mV' else volts:.1f} V"
+
+
 def compass(degrees: Any) -> str | None:
     """16-point compass name for a bearing in degrees (19 -> 'NNE'); None if not a number."""
     try:
@@ -236,6 +248,11 @@ def _icon_fields(entity: HAEntityConfig, state: Any, unit: str | None, flow: str
     }
 
 
+def _companion_volts(payload: dict | None) -> str | None:
+    payload = payload or {}
+    return volts_value(payload.get("state"), (payload.get("attributes") or {}).get("unit_of_measurement"))
+
+
 def _hilo(high: Any, low: Any) -> str | None:
     """'H 78°  L 51°' from today's forecast, leaving out missing parts (never 'L 0°')."""
     parts = []
@@ -279,6 +296,7 @@ def _shape(
         "attrs": kept,
         "display": display,
         "flow": flow,
+        "volts": _companion_volts(extras.get("volts")) if entity.volts else None,
         "detail": CONDITIONS.get(state, str(state or "")) if entity.slot == "weather" else "",
         **_icon_fields(entity, state, unit, flow),
     }
@@ -319,7 +337,7 @@ class HACache:
             ha.url,
             ha.token,
             ha.timeout_seconds,
-            tuple((e.id, e.slot, e.label, e.flow, e.direction, e.gust, e.icon) for e in ha.entities),
+            tuple((e.id, e.slot, e.label, e.flow, e.direction, e.gust, e.volts, e.icon) for e in ha.entities),
         )
         with self._lock:
             if key != self._key:

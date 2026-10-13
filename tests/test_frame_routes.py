@@ -415,3 +415,11 @@ def test_design_tokens_icons_and_night_overrides(tmp_path: Path) -> None:
     assert "innerHTML" not in body
     assert "item.label === lastLabel" in body  # a place name shows once per group of rows
     assert 'class="ph"' in body  # bird outline when the reference photo is missing
+
+
+def test_battery_voltage_sits_between_charge_and_current(tmp_path: Path) -> None:
+    body = _get(_client(_config(tmp_path)), "/frame").get_data(as_text=True)
+    volts_at = body.index('value.appendChild(el("span", "volts", item.volts))')
+    assert volts_at < body.index('el("span", "flow" + (item.flow_tone')
+    css = (GALLERY_DIR / "static" / "frame.css").read_text(encoding="utf-8")
+    assert ".row .volts { margin-left: 18px; color: var(--muted); }" in css

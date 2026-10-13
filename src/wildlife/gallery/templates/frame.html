@@ -304,6 +304,9 @@
       if (grouped) { lastLabel = item.label; }
       row.appendChild(label);
       var value = el("span", "value" + (item.value_tone ? " tone-" + item.value_tone : ""), item.display);
+      if (item.volts) {   // battery voltage as the shunt measures it, between charge and flow
+        value.appendChild(el("span", "volts", item.volts));
+      }
       if (item.flow) {   // battery in/out, signed server-side: "+1.3 A" charging, "−6.6 A" discharging
         value.appendChild(el("span", "flow" + (item.flow_tone ? " tone-" + item.flow_tone : ""), item.flow));
       }

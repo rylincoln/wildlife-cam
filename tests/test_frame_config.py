@@ -116,6 +116,14 @@ def test_rows_can_name_an_icon_from_the_frame_set() -> None:
         HAEntityConfig(id="sensor.x", slot="energy", icon="rocket")
 
 
+def test_battery_row_can_name_a_voltage_sensor() -> None:
+    e = HAEntityConfig(id="sensor.shop_soc", slot="energy", icon="battery", volts="sensor.shop_shunt_voltage")
+    assert e.volts == "sensor.shop_shunt_voltage"
+    assert HAEntityConfig(id="sensor.shop_soc", slot="energy").volts is None
+    with pytest.raises(ValidationError):  # allow-listed like id
+        HAEntityConfig(id="sensor.shop_soc", slot="energy", volts="sensor.x/../api")
+
+
 def test_ha_timeout_is_capped_below_the_page_poll_timeout() -> None:  # minor #9
     with pytest.raises(ValidationError):
         HomeAssistantConfig(timeout_seconds=6)
