@@ -43,6 +43,7 @@ from wildlife.detect import Detector
 from wildlife.events.audio_detection import AudioDetectionSource
 from wildlife.events.base import EventSource, make_event_source
 from wildlife.events.continuous_motion import EVENT_KIND as CONTINUOUS_EVENT_KIND
+from wildlife.frame_features import ir_glow_reject
 from wildlife.gate import Deduper, pick_best, select_keepers
 from wildlife.megadetector import MegaDetector, second_pass_decision
 from wildlife.models import CameraEvent, Detection
@@ -161,12 +162,17 @@ def _box_center_in_zones(box, frame_shape, zones) -> bool:
     return any(_point_in_poly(cx, cy, poly) for poly in zones)
 
 
-def _reject_reason(frame, box, camera, max_sat_frac: float) -> str | None:
+def _reject_reason(
+    frame, box, camera, max_sat_frac: float, max_ir_glow: float = 0.0
+) -> str | None:
     """Why a FINAL detection box should be dropped (IR artifact / ignore-zone), else None.
 
     Runs after the species gate + MegaDetector, so it catches both event sources and
-    MD rescues alike. Order: out-of-focus insect blob, saturated IR bloom, then a
-    per-camera ignore-zone (a chronic static-object corner)."""
+    MD rescues alike. Order: insect glowing under the IR illuminator, out-of-focus
+    insect blob, saturated IR bloom, then a per-camera ignore-zone (a chronic
+    static-object corner)."""
+    if ir_glow_reject(frame, box, max_ir_glow):
+        return "box glows under IR (insect at the illuminator)"
     if _is_defocused_blob(frame, box):
         return "out-of-focus blob (insect at IR lens)"
     if max_sat_frac < 1.0 and _saturated_fraction(frame, box) >= max_sat_frac:
@@ -744,9 +750,10 @@ class _Worker:
         # next to sharp foliage that the defocus check alone misses), and detections
         # centred in a per-camera ignore-zone (a chronic static-object corner).
         max_sat = det_cfg.max_saturated_frac
+        max_glow = det_cfg.max_ir_box_brightness
         if save_best_only:
             if best_det is not None:
-                reason = _reject_reason(best_frame, best_det.box_xyxy, camera, max_sat)
+                reason = _reject_reason(best_frame, best_det.box_xyxy, camera, max_sat, max_glow)
                 if reason:
                     logger.info(
                         "Camera %s: dropped %s (conf=%.2f) — %s.",
@@ -756,7 +763,7 @@ class _Worker:
         elif positives:
             kept_pos, dropped = [], {}
             for f, d in positives:
-                reason = _reject_reason(f, d.box_xyxy, camera, max_sat)
+                reason = _reject_reason(f, d.box_xyxy, camera, max_sat, max_glow)
                 if reason:
                     dropped[reason] = dropped.get(reason, 0) + 1
                 else:

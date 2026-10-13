@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Wildlife Detection - daily Claude-vision review LaunchAgent
+  ===========================================================================
+
+  Runs `wildlife-review run` (scheduled mode) once a day at 09:00, after the night's
+  captures: every saved detection not yet reviewed is shown to Claude, and the
+  ones it confidently judges not to be an animal (moths at the IR illuminator,
+  rain streaks, flare...) are deleted. A no-op while review.enabled is false.
+
+  A per-user LaunchAgent, not a LaunchDaemon like the others: the default
+  review.backend (claude_cli) runs the `claude` CLI on its own login, which lives
+  in this user's login keychain, reachable from their login session. If the Mac
+  is at the login window at 09:00 the run is skipped; the next one catches up.
+
+  Install (no sudo; leaves the detector/stream alone):
+    bash scripts/install_review_agent.sh
+  Run it now:
+    launchctl kickstart gui/$(id -u)/com.wildlife.review
+  Logs:
+    tail -f /Users/__USER__/wildlife/logs/review.err.log
+  ===========================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wildlife.review</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin/wildlife-review</string>
+        <string>run</string>
+        <string>--scheduled</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/__USER__/repos/wildlife-cam</string>
+
+    <!-- Daily at 09:00 local. One-shot: no RunAtLoad / KeepAlive. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/__USER__/wildlife/logs/review.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/__USER__/wildlife/logs/review.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/__USER__/repos/wildlife-cam/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/Users/__USER__/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

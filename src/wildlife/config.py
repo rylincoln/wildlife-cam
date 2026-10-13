@@ -139,6 +139,15 @@ class DetectionConfig(BaseModel):
     # white) — an IR bloom (insect/dew at the illuminator) the defocus guard misses.
     # 1.0 disables. Measured: blooms ~0.31, real night frames <0.05.
     max_saturated_frac: float = Field(default=0.20, ge=0.0, le=1.0)
+    # Night-insect gate: in an IR (monochrome) frame, drop a detection whose box is
+    # brighter than this multiple of the whole frame's brightness (a moth at the
+    # illuminator glows). Colour (daylight) frames are never judged. 0 disables --
+    # and keep it off where animals pass close to the camera: they glow too. The
+    # reviewer-labelled archive (wildlife-replay, Oct 2026) had real night animals
+    # at 1.08-1.53x (a bobcat 1.53, a porcupine 1.47), so 1.2x lost 7 of 160 real
+    # detections while removing only 59% of false positives. wildlife-review does
+    # this job instead.
+    max_ir_box_brightness: float = Field(default=0.0, ge=0.0)
 
 
 class DedupeConfig(BaseModel):
@@ -514,6 +523,55 @@ class HomeAssistantConfig(BaseModel):
         return value.strip().rstrip("/")
 
 
+class ReviewConfig(BaseModel):
+    """Daily Claude-vision review of saved camera captures (``wildlife-review``).
+
+    Each saved detection is shown to Claude (full frame with the box drawn, plus
+    a close-up); captures it judges ``not_animal`` with at least
+    ``delete_min_confidence`` are deleted. Captures a human reviewed or
+    reclassified are never deleted. Verdicts are kept in the ``review_log`` table
+    after the images are gone, as ground truth for ``wildlife-replay``.
+
+    Backends:
+
+    - ``claude_cli`` (default): runs the Claude Code CLI (``claude -p``) on its
+      own login, so a Claude subscription covers it and no API key is needed.
+      Run it as the user who ran ``claude auth login`` (the login lives in their
+      keychain), or put a ``claude setup-token`` token in ``oauth_token_file``.
+    - ``api``: the Anthropic API -- ``ANTHROPIC_API_KEY`` / an ``ant auth login``
+      profile if present, otherwise the key in ``api_key_file`` (keep it out of
+      config.yaml -- the admin UI can display this file).
+    """
+
+    enabled: bool = False
+    backend: Literal["claude_cli", "api"] = "claude_cli"
+    model: str = "claude-opus-5-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    # Deleting a real animal is far worse than keeping a moth, so only a
+    # confident not_animal verdict deletes; "unsure" and low-confidence calls keep.
+    delete_min_confidence: float = Field(default=0.85, ge=0.5, le=1.0)
+    # Cost/time bound per run, in requests (one per box cluster per burst event).
+    max_per_run: int = Field(default=300, ge=1)
+    concurrency: int = Field(default=4, ge=1, le=16)
+    api_key_file: str = "~/.config/wildlife/anthropic_api_key"
+    # claude_cli: the CLI binary (bare names are also looked for in the usual
+    # install dirs, since launchd's PATH is minimal) and an optional long-lived
+    # `claude setup-token` token, for running somewhere the keychain login isn't
+    # reachable.
+    claude_bin: str = "claude"
+    oauth_token_file: str = "~/.config/wildlife/claude_oauth_token"
+    # claude_cli: stop the run (the rest waits for the next one) once the
+    # subscription's 5-hour or weekly usage passes this fraction, so a big
+    # backlog never eats the plan's interactive use. 1.0 disables.
+    max_plan_utilization: float = Field(default=0.8, gt=0.0, le=1.0)
+    # Free-text scene description handed to the reviewer; improves its judgement.
+    site_notes: str = (
+        "Two fixed trail cameras on a rural property in southwest Colorado: sagebrush "
+        "flats and pinon-juniper. Colour by day; monochrome infrared at night, lit by "
+        "an illuminator mounted beside the lens."
+    )
+
+
 class Config(BaseModel):
     """Top-level validated configuration tree for the whole system."""
 
@@ -534,6 +592,7 @@ class Config(BaseModel):
     megadetector: MegadetectorConfig = Field(default_factory=MegadetectorConfig)
     frame: FrameConfig = Field(default_factory=FrameConfig)
     homeassistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
 
     @model_validator(mode="after")
     def _unique_camera_ids(self) -> "Config":

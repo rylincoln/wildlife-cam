@@ -60,6 +60,12 @@ autolabel = [
 audio = [
     "birdnet>=0.2,<0.3",
 ]
+# Daily Claude-vision review of saved captures (wildlife-review): deletes the
+# false positives the on-device models can't tell from animals. Only the
+# review.backend "api" needs this; the default "claude_cli" uses the `claude` CLI.
+review = [
+    "anthropic>=1",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.4",
@@ -81,6 +87,10 @@ wildlife-reload = "wildlife.reload_agent:main"
 wildlife-admin-password = "wildlife.admin.passwd:main"
 # Mint/rotate the remote (Cloudflare Tunnel) share-link secret.
 wildlife-share-secret = "wildlife.remote.share_secret:main"
+# Claude-vision review of saved captures; run daily by com.wildlife.review.
+wildlife-review = "wildlife.review:main"
+# Score candidate pipeline gates against reviewed/labelled captures.
+wildlife-replay = "wildlife.replay:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wildlife"]
