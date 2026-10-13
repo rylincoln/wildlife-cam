@@ -111,15 +111,23 @@ def display_value(slot: str, state: str | None, unit: str | None, attrs: dict) -
 
 
 def flow_value(state: str | None, unit: str | None) -> str | None:
-    """Signed battery power ('+98 W', '−1.3 kW', '0 W'); None when there is no usable reading."""
-    if unit not in ("W", "kW"):
+    """Signed battery flow from a power (W/kW) or current (A) sensor.
+
+    '+98 W', '−1.3 kW', '−6.6 A', '0 A'; None when there is no usable reading.
+    """
+    if unit not in ("W", "kW", "A"):
         return None
     try:
-        watts = float(state) * (1000 if unit == "kW" else 1)  # type: ignore[arg-type]
+        value = float(state)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    if math.isnan(watts) or math.isinf(watts):
+    if math.isnan(value) or math.isinf(value):
         return None
+    if unit == "A":
+        amps = round(value) if abs(value) >= 99.95 else round(value, 1)  # whole amps from 100 A
+        sign = "+" if amps > 0 else "−" if amps < 0 else ""
+        return f"{sign}{_num(abs(amps))} A"
+    watts = value * (1000 if unit == "kW" else 1)
     whole = round(watts)
     sign = "+" if whole > 0 else "−" if whole < 0 else ""
     if abs(whole) >= 10000:  # whole kW keeps "100%  −11 kW" on one line

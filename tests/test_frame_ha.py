@@ -348,7 +348,14 @@ def _battery_states(power: str = "1312.4") -> dict:
         ("nan", "W", None),
         ("inf", "W", None),
         ("charging", "W", None),
-        ("98", "A", None),  # not a power reading
+        ("-6.589", "A", "−6.6 A"),  # shunt current: same sign rule as power
+        ("1.3", "A", "+1.3 A"),
+        ("0.04", "A", "0 A"),
+        ("-0.04", "A", "0 A"),  # never "−0 A"
+        ("-226.4", "A", "−226 A"),  # whole amps from 100 A so the row can't wrap
+        ("99.96", "A", "+100 A"),
+        ("unavailable", "A", None),
+        ("98", "V", None),  # neither power nor current
         ("98", None, None),
     ],
 )

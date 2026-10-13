@@ -490,8 +490,8 @@ class HAEntityConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z_]+\.[a-z0-9_]+$")
     slot: Literal["weather", "temps", "energy", "rain"]
     label: str = ""  # empty -> HA friendly_name
-    # Optional power sensor (W, positive = charging, as Victron shunts report) shown
-    # after this row's value, e.g. "75%  +1.3 kW". Allow-listed like ``id``.
+    # Optional battery power (W/kW) or current (A) sensor, positive = charging as Victron
+    # shunts report, shown after this row's value, e.g. "75%  −6.6 A". Allow-listed like ``id``.
     flow: str | None = Field(default=None, pattern=r"^[a-z_]+\.[a-z0-9_]+$")
 
 

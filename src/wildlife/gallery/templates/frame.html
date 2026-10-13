@@ -224,7 +224,7 @@
       var row = el("div", "row");
       row.appendChild(el("span", "label", item.label));
       var value = el("span", "value", item.display);
-      if (item.flow) {   // battery in/out, signed server-side: "+1.3 kW" charging, "−420 W" discharging
+      if (item.flow) {   // battery in/out, signed server-side: "+1.3 A" charging, "−6.6 A" discharging
         value.appendChild(el("span", "flow", item.flow));
       }
       row.appendChild(value);
