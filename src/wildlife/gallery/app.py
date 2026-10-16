@@ -174,6 +174,13 @@ def _parse_page(value: str | None) -> int:
     return max(page, 1)
 
 
+# Gallery "Review" filter choice -> Store review filter (None: no filter).
+_REVIEW_CHOICES = {"": "hide_rejected", "all": None, "unsure": "unsure", "confirmed": "confirmed"}
+# The /frame kiosk shows a sighting only when the reviewer is at least this sure
+# it's an animal or person: a 0.55 "maybe the back of a porcupine" stays off the wall.
+_FRAME_MIN_REVIEWER_CONFIDENCE = 0.7
+
+
 def _parse_filters(args) -> dict:
     """Extract the gallery filter set from a request's query args.
 
@@ -186,6 +193,7 @@ def _parse_filters(args) -> dict:
     end_raw = (args.get("end") or "").strip()
     min_conf_raw = (args.get("min_confidence") or "").strip()
     source_kind = (args.get("source_kind") or "").strip() or None
+    review_raw = (args.get("review") or "").strip()
     return {
         "camera": camera,
         "label": label,
@@ -196,6 +204,9 @@ def _parse_filters(args) -> dict:
         "end": _parse_date(end_raw, end_of_day=True),
         "min_confidence": _parse_float(min_conf_raw),
         "source_kind": source_kind,
+        # "" (default: hide what the Claude review rejected or is unsure of), "all",
+        # "unsure" or "confirmed"; only applied while review.enabled.
+        "review_raw": review_raw if review_raw in _REVIEW_CHOICES else "",
     }
 
 
@@ -453,6 +464,12 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             "species_photo_url": url_for("species_photo", code=code) if code else None,
         }
 
+    def _review_filter(filters: dict) -> str | None:
+        """The Store review filter for the gallery's choice; none while review is off."""
+        if not get_config().review.enabled:
+            return None
+        return _REVIEW_CHOICES[filters["review_raw"]]
+
     def _query_page(filters: dict, page: int) -> tuple[list[dict], bool]:
         """Run a filtered, paged query; return ``(serialized_rows, has_more)``.
 
@@ -467,6 +484,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             end=filters["end"],
             min_confidence=filters["min_confidence"],
             source_kind=filters["source_kind"],
+            review=_review_filter(filters),
             limit=page_size + 1,
             offset=offset,
         )
@@ -485,7 +503,11 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
         """
         store = get_store()
         if source_kind != "audio" and get_config().review.enabled:
-            rows = store.query_confirmed(source_kind=source_kind, limit=limit)
+            rows = store.query_confirmed(
+                source_kind=source_kind,
+                min_reviewer_confidence=_FRAME_MIN_REVIEWER_CONFIDENCE,
+                limit=limit,
+            )
         else:
             rows = store.query(source_kind=source_kind, limit=limit)
         return [_serialize(r) for r in rows]
@@ -540,6 +562,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
             live_refresh=get_config().gallery.live_refresh_seconds,
             livestream_enabled=get_config().livestream.enabled,
             admin_enabled=bool(config_path) and get_config().admin.enabled,
+            review_enabled=get_config().review.enabled,
         )
 
     @app.route("/api/captures")
@@ -608,6 +631,7 @@ def create_app(config: Config, config_path: str | Path | None = None) -> Flask:
                         end=filters["end"],
                         min_confidence=filters["min_confidence"],
                         source_kind=filters["source_kind"],
+                        review=_review_filter(filters),
                     )
                     for row in rows:
                         last_id = row["id"]

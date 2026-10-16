@@ -561,9 +561,11 @@ class ReviewConfig(BaseModel):
     backend: Literal["claude_cli", "api"] = "claude_cli"
     model: str = "claude-opus-5-5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
-    # Deleting a real animal is far worse than keeping a moth, so only a
-    # confident not_animal verdict deletes; "unsure" and low-confidence calls keep.
-    delete_min_confidence: float = Field(default=0.85, ge=0.5, le=1.0)
+    # A not_animal verdict at or above this deletes; "unsure" always keeps. The
+    # prompt already makes not_animal a strong call (only when the reviewer can
+    # name what the region is), so this needn't be high: of 51 kept not_animal
+    # captures checked by eye at 0.60-0.82 (Oct 2026), all 51 were false positives.
+    delete_min_confidence: float = Field(default=0.6, ge=0.5, le=1.0)
     # Replace a confirmed capture's label with the species the reviewer names (at
     # >= 0.8 reviewer confidence). The detector's labels are often wrong: coyotes
     # come out as pronghorn, and it has no class for the dogs that make up much

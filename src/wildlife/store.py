@@ -191,6 +191,20 @@ def _sweep_empty_capture_dirs(captures_dir: Path, rels: Iterable[str]) -> int:
     return removed
 
 
+# The latest wildlife-review verdict for a capture row (review_log, owned by
+# wildlife.review; one row per review, the newest wins).
+_LATEST_VERDICT = (
+    "(SELECT r.verdict FROM review_log r WHERE r.capture_id = captures.id ORDER BY r.id DESC LIMIT 1)"
+)
+# ``review`` filter values -> WHERE clause. "hide_rejected" keeps unreviewed captures
+# (they are reviewed within minutes) and confirmed ones.
+REVIEW_FILTERS = {
+    "hide_rejected": f"COALESCE({_LATEST_VERDICT}, '') NOT IN ('not_animal', 'unsure')",
+    "unsure": f"{_LATEST_VERDICT} = 'unsure'",
+    "confirmed": f"{_LATEST_VERDICT} IN ('animal', 'person')",
+}
+
+
 def _build_filters(
     *,
     camera_id: str | None,
@@ -200,10 +214,23 @@ def _build_filters(
     min_confidence: float | None,
     reviewed: bool | None,
     source_kind: str | None = None,
+    review: str | None = None,
+    has_review_log: bool = False,
 ) -> tuple[list[str], list[Any]]:
-    """Build the shared AND-combined WHERE clauses + params for query/count."""
+    """Build the shared AND-combined WHERE clauses + params for query/count.
+
+    ``review`` is a :data:`REVIEW_FILTERS` key. Before any review has run there is
+    no review_log: hiding rejects is then a no-op and the other filters match nothing.
+    """
     clauses: list[str] = []
     params: list[Any] = []
+    if review is not None:
+        if review not in REVIEW_FILTERS:
+            raise ValueError(f"unknown review filter {review!r}")
+        if has_review_log:
+            clauses.append(REVIEW_FILTERS[review])
+        elif review != "hide_rejected":
+            clauses.append("0")
     if camera_id is not None:
         clauses.append("camera_id = ?")
         params.append(camera_id)
@@ -523,6 +550,7 @@ class Store:
         min_confidence: float | None = None,
         reviewed: bool | None = None,
         source_kind: str | None = None,
+        review: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Return rows newer than ``last_id`` (by primary key), oldest first.
@@ -537,6 +565,7 @@ class Store:
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
             min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
+            review=review, has_review_log=review is not None and self._has_review_log(),
         )
         clauses.append("id > ?")
         params.append(int(last_id))
@@ -556,6 +585,7 @@ class Store:
         min_confidence: float | None = None,
         reviewed: bool | None = None,
         source_kind: str | None = None,
+        review: str | None = None,
         limit: int = 60,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -570,6 +600,7 @@ class Store:
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
             min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
+            review=review, has_review_log=review is not None and self._has_review_log(),
         )
         sql = "SELECT * FROM captures"
         if clauses:
@@ -579,16 +610,21 @@ class Store:
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def query_confirmed(self, *, source_kind: str, limit: int = 60) -> list[dict[str, Any]]:
+    def _has_review_log(self) -> bool:
+        return self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_log'"
+        ).fetchone() is not None
+
+    def query_confirmed(
+        self, *, source_kind: str, min_reviewer_confidence: float = 0.0, limit: int = 60
+    ) -> list[dict[str, Any]]:
         """Newest-first captures whose latest ``wildlife-review`` verdict is a real
-        animal or person (``review_log``, owned by :mod:`wildlife.review`).
+        animal or person at ``min_reviewer_confidence`` or above (``review_log``,
+        owned by :mod:`wildlife.review`).
 
         Empty when no review has run yet.
         """
-        has_log = self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_log'"
-        ).fetchone()
-        if not has_log:
+        if not self._has_review_log():
             return []
         rows = self._conn.execute(
             """
@@ -597,10 +633,11 @@ class Store:
                AND EXISTS (SELECT 1 FROM review_log r
                             WHERE r.capture_id = c.id
                               AND r.id = (SELECT MAX(id) FROM review_log WHERE capture_id = c.id)
-                              AND r.verdict IN ('animal', 'person'))
+                              AND r.verdict IN ('animal', 'person')
+                              AND COALESCE(r.reviewer_confidence, 0) >= ?)
              ORDER BY c.capture_ts DESC, c.id DESC LIMIT ?
             """,
-            (source_kind, int(limit)),
+            (source_kind, float(min_reviewer_confidence), int(limit)),
         ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -676,11 +713,13 @@ class Store:
         min_confidence: float | None = None,
         reviewed: bool | None = None,
         source_kind: str | None = None,
+        review: str | None = None,
     ) -> int:
         """Return the number of rows matching the same filters as :meth:`query`."""
         clauses, params = _build_filters(
             camera_id=camera_id, label=label, start=start, end=end,
             min_confidence=min_confidence, reviewed=reviewed, source_kind=source_kind,
+            review=review, has_review_log=review is not None and self._has_review_log(),
         )
         sql = "SELECT COUNT(*) FROM captures"
         if clauses:

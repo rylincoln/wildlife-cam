@@ -110,7 +110,7 @@ def world(tmp_path):
         times["insect"]: _response("not_animal", 0.95),
         times["fox"]: _response("animal", 0.9),
         times["human"]: _response("not_animal", 0.97),
-        times["unsure"]: _response("not_animal", 0.6),  # below delete_min_confidence
+        times["unsure"]: _response("not_animal", 0.55),  # below delete_min_confidence
     })
     return cfg, ids, client
 
@@ -426,3 +426,34 @@ def test_relabel_target():
 def test_review_species_adds_domestic_animals_once(tmp_path):
     cfg = _config(tmp_path, extra_species=["dog", "red_fox"])
     assert review_species(cfg) == [*SPECIES, "dog"]
+
+
+def test_apply_deletes_kept_not_animals_a_lowered_threshold_now_covers(world):
+    cfg, ids, client = world
+    cfg.review.delete_min_confidence = 0.85
+    run_review(cfg, dry_run=False, limit=None, since=None, client=client)
+    assert _exists(cfg, ids["unsure"][0])  # not_animal at 0.55: kept under 0.85
+
+    cfg.review.delete_min_confidence = 0.5
+    assert apply_pending(cfg) == 1
+    assert not _exists(cfg, ids["unsure"][0])
+    assert _log(cfg)[ids["unsure"][0]] == "deleted"
+    assert _exists(cfg, ids["human"][0]) and _exists(cfg, ids["fox"][0])
+
+
+def test_recheck_re_reviews_the_latest_verdict_and_appends(world):
+    cfg, ids, client = world
+    times = list(client.by_time)
+    client.by_time[times[1]] = _response("unsure", 0.5)  # the fox, first pass
+    run_review(cfg, dry_run=False, limit=None, since=None, client=client)
+    calls = len(client.calls)
+
+    client.by_time[times[1]] = _animal("red_fox")  # second look
+    summary = run_review(cfg, dry_run=False, limit=None, since=None, client=client, recheck="unsure")
+    assert len(client.calls) == calls + 1  # only the unsure one was asked again
+    assert summary.verdicts == {"animal": 1}
+    conn = sqlite3.connect(cfg.storage.db_path)
+    rows = conn.execute("SELECT verdict FROM review_log WHERE capture_id=? ORDER BY id",
+                        (ids["fox"][0],)).fetchall()
+    conn.close()
+    assert rows == [("unsure",), ("animal",)]

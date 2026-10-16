@@ -57,6 +57,18 @@
         </select>
       </label>
 
+      {% if review_enabled %}
+      <label class="field">
+        <span>Review</span>
+        <select name="review">
+          <option value="" {% if not filters.review_raw %}selected{% endif %}>Hide rejected</option>
+          <option value="confirmed" {% if filters.review_raw == 'confirmed' %}selected{% endif %}>Confirmed only</option>
+          <option value="unsure" {% if filters.review_raw == 'unsure' %}selected{% endif %}>Unsure only</option>
+          <option value="all" {% if filters.review_raw == 'all' %}selected{% endif %}>Everything</option>
+        </select>
+      </label>
+      {% endif %}
+
       <label class="field">
         <span>From</span>
         <input type="date" name="start" value="{{ filters.start_raw }}">

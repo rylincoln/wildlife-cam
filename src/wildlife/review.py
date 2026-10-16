@@ -212,6 +212,24 @@ class ReviewLog:
         sql += " ORDER BY capture_ts DESC, confidence DESC"
         return [_candidate(r) for r in self._conn.execute(sql, args)]
 
+    def with_verdict(self, verdict: str, since: str | None = None) -> list[Candidate]:
+        """Captures still on disk whose latest review verdict is ``verdict``, newest first
+        (``run --recheck``: a second look, e.g. at higher effort)."""
+        sql = """
+            SELECT c.id, c.camera_id, c.capture_ts, c.label, c.confidence,
+                   c.box_x1, c.box_y1, c.box_x2, c.box_y2, c.image_path, c.reviewed, c.original_label
+              FROM captures c JOIN review_log r ON r.capture_id = c.id
+             WHERE c.source_kind != 'audio'
+               AND r.id = (SELECT MAX(id) FROM review_log WHERE capture_id = c.id)
+               AND r.verdict = ?
+        """
+        args: list[Any] = [verdict]
+        if since:
+            sql += " AND c.capture_ts >= ?"
+            args.append(since)
+        sql += " ORDER BY c.capture_ts DESC, c.confidence DESC"
+        return [_candidate(r) for r in self._conn.execute(sql, args)]
+
     def by_ids(self, ids: list[int]) -> list[Candidate]:
         q = ",".join("?" * len(ids))
         sql = f"""
@@ -240,15 +258,21 @@ class ReviewLog:
         )
         self._conn.commit()
 
-    def would_delete_ids(self) -> list[int]:
-        """Captures a dry run flagged that still exist and are still not human-reviewed."""
+    def would_delete_ids(self, min_confidence: float) -> list[int]:
+        """Captures to delete now: flagged by a dry run, or kept under an earlier,
+        stricter threshold with a not_animal verdict ``min_confidence`` now covers.
+        Only captures that still exist and no human has reviewed or reclassified.
+        """
         sql = """
             SELECT DISTINCT r.capture_id FROM review_log r
               JOIN captures c ON c.id = r.capture_id
-             WHERE r.action = 'would_delete'
+             WHERE r.id = (SELECT MAX(id) FROM review_log WHERE capture_id = r.capture_id)
+               AND (r.action = 'would_delete'
+                    OR (r.action = 'kept' AND r.verdict = 'not_animal'
+                        AND r.reviewer_confidence >= ?))
                AND c.reviewed = 0 AND c.original_label IS NULL
         """
-        return [int(r[0]) for r in self._conn.execute(sql)]
+        return [int(r[0]) for r in self._conn.execute(sql, (min_confidence,))]
 
     def mark_applied(self, ids: list[int]) -> None:
         now = datetime.now().isoformat(timespec="seconds")
@@ -257,7 +281,7 @@ class ReviewLog:
             q = ",".join("?" * len(chunk))
             self._conn.execute(
                 f"UPDATE review_log SET action = 'deleted', applied_at = ? "
-                f"WHERE action = 'would_delete' AND capture_id IN ({q})",
+                f"WHERE action IN ('would_delete', 'kept') AND capture_id IN ({q})",
                 [now, *chunk],
             )
         self._conn.commit()
@@ -684,13 +708,16 @@ def _judge(reviewer: Reviewer, clusters: list[Cluster], concurrency: int):
 
 
 def run_review(config: Config, *, dry_run: bool, limit: int | None, since: str | None,
-               client=None, backend=None) -> RunSummary:
+               client=None, backend=None, recheck: str | None = None) -> RunSummary:
+    """Review unreviewed captures -- or, with ``recheck``, re-review the captures whose
+    latest verdict is that one (the new verdict is appended and becomes the latest)."""
     cfg = config.review
     log = ReviewLog(config.storage.db_path)
     store = Store(config.storage.db_path, config.storage.captures_dir)
     summary = RunSummary()
     try:
-        clusters = cluster_candidates(log.pending(since=since))[: limit or cfg.max_per_run]
+        cands = log.with_verdict(recheck, since) if recheck else log.pending(since=since)
+        clusters = cluster_candidates(cands)[: limit or cfg.max_per_run]
         summary.clusters = len(clusters)
         if not clusters:
             logger.info("Nothing to review.")
@@ -738,13 +765,16 @@ def run_review(config: Config, *, dry_run: bool, limit: int | None, since: str |
 
 
 def apply_pending(config: Config) -> int:
+    """Delete what dry runs flagged, and earlier not_animal verdicts the current
+    ``review.delete_min_confidence`` now covers (after lowering it)."""
     log = ReviewLog(config.storage.db_path)
     store = Store(config.storage.db_path, config.storage.captures_dir)
     try:
-        ids = log.would_delete_ids()
+        ids = log.would_delete_ids(config.review.delete_min_confidence)
         n = store.delete_many(ids)
         log.mark_applied(ids)
-        logger.info("Deleted %d capture(s) flagged by earlier dry runs.", n)
+        logger.info("Deleted %d capture(s): dry-run flags and not_animal verdicts at >= %.2f.",
+                    n, config.review.delete_min_confidence)
         return n
     finally:
         log.close()
@@ -790,21 +820,30 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--limit", type=int, help="max requests this run (default review.max_per_run)")
     p_run.add_argument("--since", help="only captures at/after this ISO date")
     p_run.add_argument("--scheduled", action="store_true", help="no-op unless review.enabled")
+    p_run.add_argument("--recheck", choices=VERDICTS,
+                       help="re-review captures whose latest verdict is this (e.g. unsure)")
+    p_run.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
+                       help="override review.effort for this run")
     sub.add_parser("apply", help="delete captures earlier dry runs flagged")
     p_check = sub.add_parser("check", help="judge specific capture ids; prints JSON, writes nothing")
     p_check.add_argument("ids", nargs="+", type=int)
+    p_check.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
+                         help="override review.effort")
     p_rep = sub.add_parser("report", help="summarise review_log")
     p_rep.add_argument("--since")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)s: %(message)s")
     config = load_config(args.config)
+    if getattr(args, "effort", None):
+        config.review.effort = args.effort
     try:
         if args.cmd == "run":
             if args.scheduled and not config.review.enabled:
                 logger.info("review.enabled is false; nothing to do.")
                 return 0
-            run_review(config, dry_run=args.dry_run, limit=args.limit, since=args.since)
+            run_review(config, dry_run=args.dry_run, limit=args.limit, since=args.since,
+                       recheck=args.recheck)
         elif args.cmd == "apply":
             apply_pending(config)
         elif args.cmd == "check":

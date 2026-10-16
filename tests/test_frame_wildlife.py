@@ -202,7 +202,8 @@ def test_sightings_show_only_reviewer_confirmed_captures_while_review_runs(tmp_p
     for name, verdict in (("moth", "not_animal"), ("fox", "animal")):
         conn.execute(
             "INSERT INTO review_log (capture_id, representative_id, camera_id, capture_ts, label, "
-            "verdict, action, reviewed_at) VALUES (?, ?, 'south_trail', 't', 'red_fox', ?, 'kept', 'now')",
+            "verdict, reviewer_confidence, action, reviewed_at) "
+            "VALUES (?, ?, 'south_trail', 't', 'red_fox', ?, 0.9, 'kept', 'now')",
             (ids[name], ids[name], verdict),
         )
     conn.commit()
