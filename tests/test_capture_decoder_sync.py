@@ -69,6 +69,23 @@ def test_grey_plate_is_corrupt():
     assert capture.is_corrupt_frame(plate) is True
 
 
+def test_partly_decoded_drifted_plate_is_corrupt():
+    """A plate the residue has textured and drifted off 128, with a real patch.
+
+    Shaped like capture 11468 (saved as a coyote): most pixels sit 5-15 levels
+    off 128, so a per-pixel near-128 test passes it, but the plate's cells still
+    average ~133.
+    """
+    rng = np.random.default_rng(0)
+    h, w = 360, 640
+    frame = np.clip(133 + rng.normal(0, 8, (h, w)), 0, 255).astype(np.uint8)
+    frame[200:300, 400:520] = _scene(100, 120)[:, :, 0]  # the refreshed region
+    frame = np.repeat(frame[:, :, None], 3, axis=2)
+    pixels = np.abs(frame[:, :, 0].astype(np.int16) - 128) <= 4
+    assert pixels.mean() < 0.5, "the per-pixel test must have missed this plate"
+    assert capture.is_corrupt_frame(frame) is True
+
+
 def test_chroma_failure_is_corrupt():
     """Green and magenta plates (chroma decoded without luma) are corrupt."""
     green = np.zeros((120, 160, 3), np.uint8)

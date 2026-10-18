@@ -57,12 +57,18 @@ _DEFAULT_FFMPEG_CAPTURE_OPTIONS = "rtsp_transport;tcp"
 # So after opening we read and DISCARD frames until the decoder produces a real
 # one, then start the burst. Measured sync cost: 0.2-1.5s (4-43 frames).
 _DECODER_SYNC_BUDGET_S = 5.0
-# Fraction of pixels sitting at neutral 128 (+/- this tolerance) above which the
-# frame is a pre-keyframe grey plate. Measured over 445 saved captures: real
-# scenes 0.05-0.14, grey plates 0.61-0.99 -- nothing at all between 0.5 and 0.6.
+# A pre-keyframe grey plate is judged on a coarse grid of cell means, not on
+# pixels. Averaging a cell washes out the motion-vector residue a plate carries
+# and leaves its flat DC level near 128. A per-pixel test (within +/-4 of 128)
+# missed partly decoded frames whose residue had textured the plate and drifted
+# it to ~133: only 0.34-0.42 of their pixels qualified, so a coyote, a person and
+# a raccoon were saved on plates. Fraction of cells within +/- tolerance of 128,
+# measured 2026-10-18 over the 250 captures on disk: real scenes 0.00-0.23 (day,
+# IR night, sky-heavy fenceline views), decode artifacts 0.50-1.00.
+_GREY_PLATE_GRID = (64, 36)  # (w, h) cells; ~60 px squares on the 4K main stream
 _GREY_PLATE_LEVEL = 128
-_GREY_PLATE_TOLERANCE = 4
-_MAX_GREY_PLATE_FRAC = 0.5
+_GREY_PLATE_TOLERANCE = 8
+_MAX_GREY_PLATE_FRAC = 0.35
 # Ratio of the brightest to the dimmest channel mean above which the frame is a
 # chroma decode failure (the green/magenta plates). Measured: real frames top out
 # at 1.19 (IR night frames are ~1.00), corrupt ones start at 2.02.
@@ -77,7 +83,8 @@ def is_corrupt_frame(frame: np.ndarray) -> bool:
     Catches the three shapes a mid-GOP RTSP open produces, in order of how often
     they showed up in the saved captures:
 
-    1. a neutral-grey 128 plate (no reference frame -- residue only),
+    1. a neutral-grey 128 plate (no reference frame -- residue only), including a
+       partly decoded one where only some regions have been refreshed,
     2. a green/magenta plate (chroma planes decoded without luma, or vice versa),
     3. a completely flat plate of any colour.
 
@@ -90,7 +97,8 @@ def is_corrupt_frame(frame: np.ndarray) -> bool:
         if frame is None or frame.size == 0:
             return True
         grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        near_neutral = np.abs(grey.astype(np.int16) - _GREY_PLATE_LEVEL) <= _GREY_PLATE_TOLERANCE
+        cells = cv2.resize(grey, _GREY_PLATE_GRID, interpolation=cv2.INTER_AREA).astype(np.int16)
+        near_neutral = np.abs(cells - _GREY_PLATE_LEVEL) <= _GREY_PLATE_TOLERANCE
         if float(near_neutral.mean()) > _MAX_GREY_PLATE_FRAC:
             return True
         means = [float(frame[:, :, i].mean()) for i in range(frame.shape[2])]
